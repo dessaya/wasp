@@ -370,6 +370,12 @@ func TestISCPContract(t *testing.T) {
 	require.Equal(t, evmChain.soloChain.ChainID.Array(), chainID.Array())
 }
 
+func TestISCPSayHi(t *testing.T) {
+	evmChain := initEVMChain(t)
+	iscpTest := evmChain.deployISCPTestContract(evmChain.faucetKey)
+	iscpTest.sayHi()
+}
+
 func initBenchmark(b *testing.B) (*solo.Chain, []*solo.CallParams) {
 	// setup: deploy the evmchain contract
 	log := testlogger.NewSilentLogger(b.Name(), true)

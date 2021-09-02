@@ -73,7 +73,7 @@ type ethCallOptions struct {
 }
 
 func initEVMChain(t testing.TB, nativeContracts ...*coreutil.ContractProcessor) *evmChainInstance {
-	env := solo.New(t, false, false).WithNativeContract(Processor)
+	env := solo.New(t, true, true).WithNativeContract(Processor)
 	for _, c := range nativeContracts {
 		env = env.WithNativeContract(c)
 	}
@@ -389,6 +389,11 @@ func (i *iscpTestContractInstance) getChainID() *iscp.ChainID {
 	var iscpAddress iscpcontract.ISCPAddress
 	i.callView(nil, "getChainId", nil, &iscpAddress)
 	return iscpcontract.ChainIDFromISCPAddress(iscpAddress)
+}
+
+func (i *iscpTestContractInstance) sayHi() {
+	_, err := i.callFn(nil, "sayHi")
+	require.NoError(i.chain.t, err)
 }
 
 func (s *storageContractInstance) retrieve() uint32 {

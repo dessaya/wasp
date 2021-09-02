@@ -16,13 +16,17 @@ import (
 )
 
 var (
-	// ISCPContractAddress is the arbitrary address on which the standard
+	// EVMAddress is the arbitrary address on which the standard
 	// ISCP EVM contract lives
 	EVMAddress = common.HexToAddress("0x1074")
 	//go:embed ISCP.abi
 	ABI string
 	//go:embed ISCP.bin-runtime
 	bytecodeHex string
+
+	evmYulAddress = common.HexToAddress("0x1075")
+	//go:embed ISCPYul.bin-runtime
+	yulBytecodeHex string
 )
 
 // ISCPAddress maps to the equally-named struct in iscp.sol
@@ -52,16 +56,16 @@ func ChainIDFromISCPAddress(a ISCPAddress) *iscp.ChainID {
 	return chainID
 }
 
-// GenesisAccount returns the initial state of the ISCP EVM contract
+// DeployOnGenesis sets up the initial state of the ISCP EVM contract
 // which will go into the EVM genesis block
-func GenesisAccount(chainID *iscp.ChainID) core.GenesisAccount {
+func DeployOnGenesis(genesisAlloc core.GenesisAlloc, chainID *iscp.ChainID) {
 	chainIDAsISCPAddress := ChainIDToISCPAddress(chainID)
 	var typeIDHash common.Hash
 	typeIDHash[31] = chainIDAsISCPAddress.TypeID[0]
 	var digestHash common.Hash
 	copy(digestHash[:], chainIDAsISCPAddress.Digest[:])
 
-	return core.GenesisAccount{
+	genesisAlloc[EVMAddress] = core.GenesisAccount{
 		Code: common.FromHex(strings.TrimSpace(bytecodeHex)),
 		Storage: map[common.Hash]common.Hash{
 			// offset 0 / slot 0: chainID.typeId
@@ -69,6 +73,11 @@ func GenesisAccount(chainID *iscp.ChainID) core.GenesisAccount {
 			// offset 0 / slot 1: chainID.digest
 			common.HexToHash("01"): digestHash,
 		},
+		Balance: &big.Int{},
+	}
+
+	genesisAlloc[evmYulAddress] = core.GenesisAccount{
+		Code:    common.FromHex(strings.TrimSpace(yulBytecodeHex)),
 		Balance: &big.Int{},
 	}
 }
