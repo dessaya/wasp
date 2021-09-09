@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/iotaledger/wasp/packages/evm"
 	"github.com/iotaledger/wasp/packages/iscp"
 	"github.com/iotaledger/wasp/packages/iscp/assert"
@@ -38,7 +39,9 @@ func isNotFound(err error) bool {
 // create a single Ethereum block for each ISCP block.
 func getOrCreateEmulator(ctx iscp.Sandbox) *evm.EVMEmulator {
 	bctx := ctx.BlockContext(createEmulator, commitEthereumBlock)
-	return bctx.(*evm.EVMEmulator)
+	emu := bctx.(*evm.EVMEmulator)
+	emu.IEVMBackend = &ievm{ctx}
+	return emu
 }
 
 func createEmulator(ctx iscp.Sandbox) interface{} {
@@ -53,6 +56,8 @@ func timestamp(ctx iscp.SandboxBase) uint64 {
 
 func commitEthereumBlock(blockContext interface{}) {
 	emu := blockContext.(*evm.EVMEmulator)
+	// TODO
+	//emu.IEVMBackend = &ievm{ctx}
 	emu.Commit()
 	emu.Close()
 }
@@ -62,6 +67,7 @@ func withEmulatorR(ctx iscp.SandboxView, f func(*evm.EVMEmulator) dict.Dict) (di
 		rawdb.NewDatabase(evm.NewKVAdapter(buffered.NewBufferedKVStore(ctx.State()))),
 		timestamp(ctx),
 	)
+	emu.IEVMBackend = &ievmR{ctx}
 	defer emu.Close()
 	return f(emu), nil
 }
@@ -169,3 +175,21 @@ func getFeeColor(ctx iscp.Sandbox) colored.Color {
 	a.RequireNoError(err)
 	return feeColor
 }
+
+type ievm struct {
+	ctx iscp.Sandbox
+}
+
+var _ vm.IEVMBackend = &ievm{}
+
+func (i *ievm) SayHi() {
+	i.ctx.Event("Hi from EVM!")
+}
+
+type ievmR struct {
+	ctx iscp.SandboxView
+}
+
+var _ vm.IEVMBackend = &ievmR{}
+
+func (i *ievmR) SayHi() {}

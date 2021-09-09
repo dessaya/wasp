@@ -1,6 +1,6 @@
 all: ISCP.bin-runtime ISCPYul.bin-runtime
 
-ARGS=--evm-version=homestead
+ARGS=--evm-version=berlin
 
 # TODO: solc --pretty-json does not work as advertised?
 

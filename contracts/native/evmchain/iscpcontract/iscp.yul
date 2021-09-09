@@ -2,7 +2,7 @@ object "ISCPYul" {
   code {
     switch selector()
     case 0x0c49c36c /* "sayHi()" */ {
-      verbatim_0i_0o(hex"f9")
+      verbatim_0i_0o(hex"c0")
     }
     default {
       revert(0, 0)

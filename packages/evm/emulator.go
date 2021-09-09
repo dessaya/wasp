@@ -49,17 +49,17 @@ type pending struct {
 }
 
 type EVMEmulator struct {
-	database   ethdb.Database
-	blockchain *core.BlockChain
-	pending    *pending
-	engine     consensus.Engine
+	database    ethdb.Database
+	blockchain  *core.BlockChain
+	pending     *pending
+	engine      consensus.Engine
+	IEVMBackend vm.IEVMBackend
 }
 
 var (
 	TxGas           = uint64(21000) // gas cost of simple transfer (not contract creation / call)
 	GasLimitDefault = uint64(15000000)
 	GasPrice        = big.NewInt(0)
-	vmConfig        = vm.Config{}
 	timeDelta       = uint64(1) // amount of seconds to add to timestamp by default for new blocks
 )
 
@@ -105,6 +105,10 @@ func InitGenesis(chainID int, db ethdb.Database, alloc core.GenesisAlloc, gasLim
 var cacheConfig = &core.CacheConfig{}
 
 func NewEVMEmulator(db ethdb.Database, timestamp ...uint64) *EVMEmulator {
+	e := &EVMEmulator{
+		database: db,
+	}
+
 	canonicalHash := rawdb.ReadCanonicalHash(db, 0)
 	if (canonicalHash == common.Hash{}) {
 		panic("must initialize genesis block first")
@@ -112,13 +116,13 @@ func NewEVMEmulator(db ethdb.Database, timestamp ...uint64) *EVMEmulator {
 
 	config := rawdb.ReadChainConfig(db, canonicalHash)
 	engine := ethash.NewFaker()
+	vmConfig := vm.Config{
+		JumpTable: vm.NewIEVMInstructionSet(e.GetIEVMBackend),
+	}
 	blockchain, _ := core.NewBlockChain(db, cacheConfig, config, engine, vmConfig, nil, nil)
 
-	e := &EVMEmulator{
-		database:   db,
-		blockchain: blockchain,
-		engine:     engine,
-	}
+	e.blockchain = blockchain
+	e.engine = engine
 
 	parentTime := e.blockchain.CurrentBlock().Header().Time
 	// ensure that timestamp is larger, even when generating many blocks per second in tests
@@ -129,6 +133,10 @@ func NewEVMEmulator(db ethdb.Database, timestamp ...uint64) *EVMEmulator {
 
 	e.Rollback(ts)
 	return e
+}
+
+func (e *EVMEmulator) GetIEVMBackend() vm.IEVMBackend {
+	return e.IEVMBackend
 }
 
 // Close terminates the underlying blockchain's update loop.
@@ -143,13 +151,6 @@ func (e *EVMEmulator) Commit() {
 	if len(e.pending.txs) == 0 {
 		return
 	}
-	if _, err := e.blockchain.InsertChain([]*types.Block{e.finalizeBlock()}); err != nil {
-		panic(err)
-	}
-	e.Rollback(e.pending.header.Time + timeDelta)
-}
-
-func (e *EVMEmulator) finalizeBlock() *types.Block {
 	block, err := e.engine.FinalizeAndAssemble(
 		e.blockchain,
 		e.pending.header,
@@ -161,14 +162,10 @@ func (e *EVMEmulator) finalizeBlock() *types.Block {
 	if err != nil {
 		panic(err)
 	}
-	root, err := e.pending.state.Commit(true)
-	if err != nil {
+	if _, err := e.blockchain.InsertChain([]*types.Block{block}); err != nil {
 		panic(err)
 	}
-	if err := e.pending.state.Database().TrieDB().Commit(root, false, nil); err != nil {
-		panic(err)
-	}
-	return block
+	e.Rollback(e.pending.header.Time + timeDelta)
 }
 
 // Rollback aborts all pending transactions, reverting to the last committed state.
@@ -502,7 +499,7 @@ func (e *EVMEmulator) callContract(call ethereum.CallMsg, header *types.Header, 
 	evmContext := core.NewEVMBlockContext(header, e.blockchain, nil)
 	// Create a new environment which holds all relevant information
 	// about the transaction and calling mechanisms.
-	vmEnv := vm.NewEVM(evmContext, txContext, stateDB, e.blockchain.Config(), vmConfig)
+	vmEnv := vm.NewEVM(evmContext, txContext, stateDB, e.blockchain.Config(), *e.blockchain.GetVMConfig())
 	gasPool := new(core.GasPool).AddGas(math.MaxUint64)
 
 	return core.NewStateTransition(vmEnv, msg, gasPool).TransitionDb()
@@ -533,7 +530,7 @@ func (e *EVMEmulator) SendTransaction(tx *types.Transaction) (*types.Receipt, er
 		e.pending.header,
 		tx,
 		&e.pending.header.GasUsed,
-		vmConfig,
+		*e.blockchain.GetVMConfig(),
 	)
 	if err != nil {
 		e.pending.state.RevertToSnapshot(snap)

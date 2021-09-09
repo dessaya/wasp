@@ -391,9 +391,8 @@ func (i *iscpTestContractInstance) getChainID() *iscp.ChainID {
 	return iscpcontract.ChainIDFromISCPAddress(iscpAddress)
 }
 
-func (i *iscpTestContractInstance) sayHi() {
-	_, err := i.callFn(nil, "sayHi")
-	require.NoError(i.chain.t, err)
+func (i *iscpTestContractInstance) sayHi() (res callFnResult, err error) {
+	return i.callFn(nil, "sayHi")
 }
 
 func (s *storageContractInstance) retrieve() uint32 {

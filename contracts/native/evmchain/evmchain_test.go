@@ -373,7 +373,9 @@ func TestISCPContract(t *testing.T) {
 func TestISCPSayHi(t *testing.T) {
 	evmChain := initEVMChain(t)
 	iscpTest := evmChain.deployISCPTestContract(evmChain.faucetKey)
-	iscpTest.sayHi()
+	res, err := iscpTest.sayHi()
+	require.NoError(t, err)
+	require.Equal(t, types.ReceiptStatusSuccessful, res.receipt.Status)
 }
 
 func initBenchmark(b *testing.B) (*solo.Chain, []*solo.CallParams) {
