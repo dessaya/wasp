@@ -1,0 +1,97 @@
+package trie
+
+import (
+	"encoding/hex"
+)
+
+// nodeStore immutable node store
+type nodeStore struct {
+	trieStore        KVReader
+	valueStore       KVReader
+	cache            map[string]*nodeData
+	clearCacheAtSize int
+}
+
+const defaultClearCacheEveryGets = 1000
+
+const (
+	partitionTrieNodes = byte(iota)
+	partitionValues
+)
+
+// MustInitRoot initializes new empty root with the given identity
+func MustInitRoot(store KVWriter, identity []byte) VCommitment {
+	assert(len(identity) > 0, "MustInitRoot: identity of the root cannot be empty")
+	// create a node with the commitment to the identity as terminal for the root
+	// stores identity in the value store if it does not fit the commitment
+	// assigns state index 0
+	rootNodeData := newNodeData()
+	n := newBufferedNode(rootNodeData, nil)
+	n.setValue(identity)
+
+	trieStore := makeWriterPartition(store, partitionTrieNodes)
+	valueStore := makeWriterPartition(store, partitionValues)
+	n.commitNode(trieStore, valueStore)
+
+	return n.nodeData.Commitment.Clone()
+}
+
+func openNodeStore(store KVReader, clearCacheAtSize ...int) *nodeStore {
+	ret := &nodeStore{
+		trieStore:        makeReaderPartition(store, partitionTrieNodes),
+		valueStore:       makeReaderPartition(store, partitionValues),
+		cache:            make(map[string]*nodeData),
+		clearCacheAtSize: defaultClearCacheEveryGets,
+	}
+	if len(clearCacheAtSize) > 0 {
+		ret.clearCacheAtSize = clearCacheAtSize[0]
+	}
+	return ret
+}
+
+func (ns *nodeStore) FetchNodeData(nodeCommitment VCommitment) (*nodeData, bool) {
+	dbKey := nodeCommitment.Bytes()
+	if ns.clearCacheAtSize > 0 {
+		// if caching is used at all
+		if ret, inCache := ns.cache[string(dbKey)]; inCache {
+			return ret, true
+		}
+		if len(ns.cache) > ns.clearCacheAtSize {
+			// GC the whole cache when cache reaches specified size
+			// TODO: improve
+			ns.cache = make(map[string]*nodeData)
+		}
+	}
+	nodeBin := ns.trieStore.Get(dbKey)
+	if len(nodeBin) == 0 {
+		return nil, false
+	}
+	ret, err := nodeDataFromBytes(nodeBin)
+	assert(err == nil, "NodeStore::FetchNodeData err: '%v' nodeBin: '%s', commitment: %s",
+		err, hex.EncodeToString(nodeBin), nodeCommitment)
+	ret.Commitment = nodeCommitment
+	return ret, true
+}
+
+func (ns *nodeStore) MustFetchNodeData(nodeCommitment VCommitment) *nodeData {
+	ret, ok := ns.FetchNodeData(nodeCommitment)
+	assert(ok, "NodeStore::MustFetchNodeData: cannot find node data: commitment: '%s'", nodeCommitment.String())
+	return ret
+}
+
+func (ns *nodeStore) FetchChild(n *nodeData, childIdx byte, trieKey []byte) (*nodeData, []byte) {
+	c := n.ChildCommitments[childIdx]
+	if c == nil {
+		return nil, nil
+	}
+	childTriePath := concat(trieKey, n.PathFragment, []byte{childIdx})
+
+	ret, ok := ns.FetchNodeData(c)
+	assert(ok, "immutable::FetchChild: failed to fetch node. trieKey: '%s', childIndex: %d",
+		hex.EncodeToString(trieKey), childIdx)
+	return ret, childTriePath
+}
+
+func (ns *nodeStore) clearCache() {
+	ns.cache = make(map[string]*nodeData)
+}

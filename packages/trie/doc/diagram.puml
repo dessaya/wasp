@@ -1,0 +1,60 @@
+@startuml
+
+struct TrieReader {
+}
+
+interface VCommitment {}
+
+interface TCommitment {}
+
+struct nodeStore {
+  trieStore: KVReader
+  valueStore: KVReader
+}
+
+struct nodeData {
+  {field} PathFragment: []byte (nibbles)
+  Terminal: TCommitment
+  Commitment: VCommitment
+  Children: [16]VCommitment
+}
+
+struct terminalCommitment {
+  bytes: []byte
+  containsValue: bool
+}
+
+note top of terminalCommitment
+  bytes is either:
+  - value
+  - hash(value)[1:]
+  
+  serialized as [flag|size|data]
+end note
+
+struct vectorCommitment {}
+
+note top of vectorCommitment
+  [20]byte
+  (hash)
+end note
+
+package db <<Database>> {
+  package valueStore <<Database>> {
+  }
+  package trieStore <<Database>> {
+  }
+}
+
+TrieReader *-- nodeStore
+TrieReader *-- VCommitment: root
+nodeStore ..> db
+nodeData ..> trieStore: "key=Commitment.Bytes()"
+terminalCommitment ..> valueStore: "key=Terminal.Bytes()\n(if flag == false)"
+nodeData "1" *-- "1" TCommitment: Terminal
+nodeData "1" *-- "1" VCommitment: Commitment
+nodeData "1" *-- "16" VCommitment: Children
+vectorCommitment --|> VCommitment
+terminalCommitment --|> TCommitment
+
+@enduml
