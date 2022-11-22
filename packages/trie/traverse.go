@@ -47,7 +47,7 @@ func (tr *TrieReader) nodePath(triePath []byte) ([]*pathElement, pathEndingCode)
 		elem := &pathElement{
 			NodeData: n,
 		}
-		nextChildIdx := len(trieKey) + len(n.PathFragment)
+		nextChildIdx := len(trieKey) + len(n.pathExtension)
 		if nextChildIdx < len(triePath) {
 			elem.ChildIndex = triePath[nextChildIdx]
 		}
@@ -59,40 +59,39 @@ func (tr *TrieReader) nodePath(triePath []byte) ([]*pathElement, pathEndingCode)
 	return ret, endingCode
 }
 
-func (tr *TrieReader) traversePath(triePath []byte, fun func(n *nodeData, trieKey []byte, ending pathEndingCode)) {
+func (tr *TrieReader) traversePath(target []byte, fun func(*nodeData, []byte, pathEndingCode)) {
 	n, found := tr.nodeStore.FetchNodeData(tr.persistentRoot)
 	if !found {
 		return
 	}
-	var trieKey []byte
+	var path []byte
 	for {
-		keyPlusPathFragment := concat(trieKey, n.PathFragment)
+		pathPlusExtension := concat(path, n.pathExtension)
 		switch {
-		case len(triePath) < len(keyPlusPathFragment):
-			fun(n, trieKey, endingSplit)
+		case len(pathPlusExtension) > len(target):
+			fun(n, path, endingSplit)
 			return
-		case len(triePath) == len(keyPlusPathFragment):
-			if bytes.Equal(keyPlusPathFragment, triePath) {
-				fun(n, trieKey, endingTerminal)
+		case len(pathPlusExtension) == len(target):
+			if bytes.Equal(pathPlusExtension, target) {
+				fun(n, path, endingTerminal)
 			} else {
-				fun(n, trieKey, endingSplit)
+				fun(n, path, endingSplit)
 			}
 			return
 		default:
-			assert(len(keyPlusPathFragment) < len(triePath), "len(keyPlusPathFragment) < len(triePath)")
-			prefix, _, _ := commonPrefix(keyPlusPathFragment, triePath)
-			if !bytes.Equal(prefix, keyPlusPathFragment) {
-				fun(n, trieKey, endingSplit)
+			prefix, _, _ := commonPrefix(pathPlusExtension, target)
+			if !bytes.Equal(prefix, pathPlusExtension) {
+				fun(n, path, endingSplit)
 				return
 			}
-			childIndex := triePath[len(keyPlusPathFragment)]
-			child, childTrieKey := tr.nodeStore.FetchChild(n, childIndex, trieKey)
+			childIndex := target[len(pathPlusExtension)]
+			child, childTrieKey := tr.nodeStore.FetchChild(n, childIndex, path)
 			if child == nil {
 				fun(n, childTrieKey, endingExtend)
 				return
 			}
-			fun(n, trieKey, endingNone)
-			trieKey = childTrieKey
+			fun(n, path, endingNone)
+			path = childTrieKey
 			n = child
 		}
 	}
@@ -101,26 +100,26 @@ func (tr *TrieReader) traversePath(triePath []byte, fun func(n *nodeData, trieKe
 func (tr *TrieUpdatable) traverseMutatedPath(triePath []byte, fun func(n *bufferedNode, ending pathEndingCode)) {
 	n := tr.mutatedRoot
 	for {
-		keyPlusPathFragment := concat(n.triePath, n.pathFragment)
+		keyPlusPathExtension := concat(n.triePath, n.pathExtension)
 		switch {
-		case len(triePath) < len(keyPlusPathFragment):
+		case len(triePath) < len(keyPlusPathExtension):
 			fun(n, endingSplit)
 			return
-		case len(triePath) == len(keyPlusPathFragment):
-			if bytes.Equal(keyPlusPathFragment, triePath) {
+		case len(triePath) == len(keyPlusPathExtension):
+			if bytes.Equal(keyPlusPathExtension, triePath) {
 				fun(n, endingTerminal)
 			} else {
 				fun(n, endingSplit)
 			}
 			return
 		default:
-			assert(len(keyPlusPathFragment) < len(triePath), "len(keyPlusPathFragment) < len(triePath)")
-			prefix, _, _ := commonPrefix(keyPlusPathFragment, triePath)
-			if !bytes.Equal(prefix, keyPlusPathFragment) {
+			assert(len(keyPlusPathExtension) < len(triePath), "len(keyPlusPathExtension) < len(triePath)")
+			prefix, _, _ := commonPrefix(keyPlusPathExtension, triePath)
+			if !bytes.Equal(prefix, keyPlusPathExtension) {
 				fun(n, endingSplit)
 				return
 			}
-			childIndex := triePath[len(keyPlusPathFragment)]
+			childIndex := triePath[len(keyPlusPathExtension)]
 			child := n.getChild(childIndex, tr.nodeStore)
 			if child == nil {
 				fun(n, endingExtend)
@@ -132,22 +131,15 @@ func (tr *TrieUpdatable) traverseMutatedPath(triePath []byte, fun func(n *buffer
 	}
 }
 
-func commonPrefix(b1, b2 []byte) ([]byte, []byte, []byte) {
-	ret := make([]byte, 0)
+func commonPrefix(b1, b2 []byte) (prefix []byte, tail1 []byte, tail2 []byte) {
 	i := 0
 	for ; i < len(b1) && i < len(b2); i++ {
 		if b1[i] != b2[i] {
 			break
 		}
-		ret = append(ret, b1[i])
 	}
-	var r1, r2 []byte
-	if i < len(b1) {
-		r1 = b1[i:]
-	}
-	if i < len(b2) {
-		r2 = b2[i:]
-	}
-
-	return ret, r1, r2
+	prefix = b1[:i]
+	tail1 = b1[i:]
+	tail2 = b2[i:]
+	return
 }

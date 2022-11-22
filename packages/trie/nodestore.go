@@ -19,21 +19,16 @@ const (
 	partitionValues
 )
 
-// MustInitRoot initializes new empty root with the given identity
-func MustInitRoot(store KVWriter, identity []byte) VCommitment {
-	assert(len(identity) > 0, "MustInitRoot: identity of the root cannot be empty")
-	// create a node with the commitment to the identity as terminal for the root
-	// stores identity in the value store if it does not fit the commitment
-	// assigns state index 0
+// MustInitRoot initializes a new empty trie
+func MustInitRoot(store KVWriter) VCommitment {
 	rootNodeData := newNodeData()
 	n := newBufferedNode(rootNodeData, nil)
-	n.setValue(identity)
 
 	trieStore := makeWriterPartition(store, partitionTrieNodes)
 	valueStore := makeWriterPartition(store, partitionValues)
 	n.commitNode(trieStore, valueStore)
 
-	return n.nodeData.Commitment.Clone()
+	return n.nodeData.commitment.Clone()
 }
 
 func openNodeStore(store KVReader, clearCacheAtSize ...int) *nodeStore {
@@ -69,7 +64,7 @@ func (ns *nodeStore) FetchNodeData(nodeCommitment VCommitment) (*nodeData, bool)
 	ret, err := nodeDataFromBytes(nodeBin)
 	assert(err == nil, "NodeStore::FetchNodeData err: '%v' nodeBin: '%s', commitment: %s",
 		err, hex.EncodeToString(nodeBin), nodeCommitment)
-	ret.Commitment = nodeCommitment
+	ret.commitment = nodeCommitment
 	return ret, true
 }
 
@@ -80,11 +75,11 @@ func (ns *nodeStore) MustFetchNodeData(nodeCommitment VCommitment) *nodeData {
 }
 
 func (ns *nodeStore) FetchChild(n *nodeData, childIdx byte, trieKey []byte) (*nodeData, []byte) {
-	c := n.ChildCommitments[childIdx]
+	c := n.children[childIdx]
 	if c == nil {
 		return nil, nil
 	}
-	childTriePath := concat(trieKey, n.PathFragment, []byte{childIdx})
+	childTriePath := concat(trieKey, n.pathExtension, []byte{childIdx})
 
 	ret, ok := ns.FetchNodeData(c)
 	assert(ok, "immutable::FetchChild: failed to fetch node. trieKey: '%s', childIndex: %d",

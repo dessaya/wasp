@@ -11,7 +11,7 @@ type bufferedNode struct {
 	nodeData            *nodeData
 	value               []byte // will be persisted in value store if not nil
 	terminal            TCommitment
-	pathFragment        []byte
+	pathExtension       []byte
 	uncommittedChildren map[byte]*bufferedNode // children which has been modified
 	triePath            []byte
 }
@@ -22,8 +22,8 @@ func newBufferedNode(n *nodeData, triePath []byte) *bufferedNode {
 	}
 	ret := &bufferedNode{
 		nodeData:            n,
-		terminal:            n.Terminal,
-		pathFragment:        n.PathFragment,
+		terminal:            n.terminal,
+		pathExtension:       n.pathExtension,
 		uncommittedChildren: make(map[byte]*bufferedNode),
 		triePath:            triePath,
 	}
@@ -31,7 +31,6 @@ func newBufferedNode(n *nodeData, triePath []byte) *bufferedNode {
 }
 
 // commitNode re-calculates node commitment and, recursively, its children commitments
-// Normally, the commitNode is called on the root, then
 func (n *bufferedNode) commitNode(triePartition, valuePartition KVWriter) {
 	childUpdates := make(map[byte]VCommitment)
 	for idx, child := range n.uncommittedChildren {
@@ -39,10 +38,10 @@ func (n *bufferedNode) commitNode(triePartition, valuePartition KVWriter) {
 			childUpdates[idx] = nil
 		} else {
 			child.commitNode(triePartition, valuePartition)
-			childUpdates[idx] = child.nodeData.Commitment
+			childUpdates[idx] = child.nodeData.commitment
 		}
 	}
-	updateNodeCommitment(n.nodeData, childUpdates, n.terminal, n.pathFragment)
+	updateNodeCommitment(n.nodeData, childUpdates, n.terminal, n.pathExtension)
 
 	n.mustPersist(triePartition)
 	if len(n.value) > 0 {
@@ -51,7 +50,7 @@ func (n *bufferedNode) commitNode(triePartition, valuePartition KVWriter) {
 }
 
 func (n *bufferedNode) mustPersist(w KVWriter) {
-	dbKey := n.nodeData.Commitment.Bytes()
+	dbKey := n.nodeData.commitment.Bytes()
 	var buf bytes.Buffer
 	err := n.nodeData.Write(&buf)
 	assertNoError(err)
@@ -91,8 +90,8 @@ func (n *bufferedNode) removeChild(child *bufferedNode, idx ...byte) {
 	n.uncommittedChildren[index] = nil
 }
 
-func (n *bufferedNode) setPathFragment(pf []byte) {
-	n.pathFragment = pf
+func (n *bufferedNode) setPathExtension(pf []byte) {
+	n.pathExtension = pf
 }
 
 func (n *bufferedNode) setValue(value []byte) {
@@ -118,11 +117,11 @@ func (n *bufferedNode) getChild(childIndex byte, db *nodeStore) *bufferedNode {
 	if ret, already := n.uncommittedChildren[childIndex]; already {
 		return ret
 	}
-	childCommitment := n.nodeData.ChildCommitments[childIndex]
+	childCommitment := n.nodeData.children[childIndex]
 	if childCommitment == nil {
 		return nil
 	}
-	childTriePath := concat(n.triePath, n.pathFragment, []byte{childIndex})
+	childTriePath := concat(n.triePath, n.pathExtension, []byte{childIndex})
 
 	nodeFetched, ok := db.FetchNodeData(childCommitment)
 	assert(ok, "TrieUpdatable::getChild: can't fetch node. triePath: '%s', dbKey: '%s",

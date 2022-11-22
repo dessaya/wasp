@@ -7,27 +7,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestProofIdentityBlake2b(t *testing.T) {
-	const identity = "idididididid"
-	store := NewInMemoryKVStore()
-	initRoot := MustInitRoot(store, []byte(identity))
-	tr, err := NewTrieReader(store, initRoot)
-	require.NoError(t, err)
-	p := tr.MerkleProof(nil)
-	err = p.Validate(initRoot.Bytes())
-	require.NoError(t, err)
-
-	cID := CommitToData([]byte(identity))
-	err = p.ValidateWithTerminal(initRoot.Bytes(), cID.Bytes())
-	require.NoError(t, err)
-}
-
 func TestProofScenariosBlake2b(t *testing.T) {
-	const identity = "idididididid"
 	runScenario := func(name string, scenario []string) {
 		t.Run(name, func(t *testing.T) {
 			store := NewInMemoryKVStore()
-			initRoot := MustInitRoot(store, []byte(identity))
+			initRoot := MustInitRoot(store)
 			tr, err := NewTrieUpdatable(store, initRoot)
 			require.NoError(t, err)
 

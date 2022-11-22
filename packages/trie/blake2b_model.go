@@ -11,21 +11,18 @@ import (
 // based on `blake2b` 20 byte (160 bit) hashing.
 
 // terminalCommitment commits to data of arbitrary size.
-// len(bytes) is <= 32
-// if isHash == true, len(bytes) must be 32
-// otherwise it is not hashed value, mus be len(bytes) <= 32
 type terminalCommitment struct {
-	bytes               []byte
-	isValueInCommitment bool
+	data    []byte
+	isValue bool
 }
 
 const (
 	HashSizeBits  = 160
 	HashSizeBytes = HashSizeBits / 8
 
-	vectorLength                = NumChildren + 2 // 16 children + terminal + path fragment
-	terminalCommitmentIndex     = NumChildren
-	pathFragmentCommitmentIndex = NumChildren + 1
+	vectorLength                 = NumChildren + 2 // 16 children + terminal + path extension
+	terminalCommitmentIndex      = NumChildren
+	pathExtensionCommitmentIndex = NumChildren + 1
 )
 
 type Hash [HashSizeBytes]byte
@@ -33,23 +30,36 @@ type Hash [HashSizeBytes]byte
 // vectorCommitment is a blake2b hash of the vector elements
 type vectorCommitment Hash
 
+// terminalCommitment is encoded as [header | data]
+// where header = isValue (1 bit) | data size (7 bits)
 const (
-	terminalCommitmentSizeMax = 0x3F // 63
-	valueInCommitmentMask     = 0x40
+	tCommitmentIsValueMask  = 0x80
+	tCommitmentDataSizeMask = tCommitmentIsValueMask - 1
+
+	tCommitmentMaxSizeBytes    = 64
+	tCommitmentHeaderSizeBytes = 1
+
+	// if len(value) > tCommitmentDataSizeMax, terminalCommitment data will
+	// be hash(value) which is 20 bytes
+	tCommitmentDataSizeMax = tCommitmentMaxSizeBytes - tCommitmentHeaderSizeBytes
 )
 
+func init() {
+	assert(tCommitmentDataSizeMax <= tCommitmentDataSizeMask, "tCommitmentDataSizeMax <= tCommitmentDataSizeMask")
+}
+
 // updateNodeCommitment computes update to the node data and, optionally, updates existing commitment.
-func updateNodeCommitment(mutate *nodeData, childUpdates map[byte]VCommitment, newTerminalUpdate TCommitment, pathFragment []byte) {
+func updateNodeCommitment(mutate *nodeData, childUpdates map[byte]VCommitment, newTerminalUpdate TCommitment, pathExtension []byte) {
 	for i, upd := range childUpdates {
-		mutate.ChildCommitments[i] = upd
+		mutate.children[i] = upd
 	}
-	mutate.Terminal = newTerminalUpdate // for hash commitment just replace
-	mutate.PathFragment = pathFragment
-	if mutate.ChildrenCount() == 0 && mutate.Terminal == nil {
+	mutate.terminal = newTerminalUpdate // for hash commitment just replace
+	mutate.pathExtension = pathExtension
+	if mutate.ChildrenCount() == 0 && mutate.terminal == nil {
 		return
 	}
 	v := vectorCommitment(makeHashVector(mutate).Hash())
-	mutate.Commitment = &v
+	mutate.commitment = &v
 }
 
 // compressToHashSize hashes data if longer than hash size, otherwise copies it
@@ -71,23 +81,23 @@ func CommitToData(data []byte) TCommitment {
 		return nil
 	}
 	var commitmentBytes []byte
-	var isValueInCommitment bool
+	var isValue bool
 
-	if len(data) > terminalCommitmentSizeMax {
-		isValueInCommitment = false
+	if len(data) > tCommitmentDataSizeMax {
+		isValue = false
 		// taking the hash as commitment data for long values
 		hash := blake2b160(data)
 		commitmentBytes = hash[:]
 	} else {
-		isValueInCommitment = true
+		isValue = true
 		// just cloning bytes. The data is its own commitment
 		commitmentBytes = concat(data)
 	}
-	assert(len(commitmentBytes) <= terminalCommitmentSizeMax,
-		"len(commitmentBytes) <= m.terminalCommitmentSizeMax")
+	assert(len(commitmentBytes) <= tCommitmentDataSizeMax,
+		"len(commitmentBytes) <= m.tCommitmentDataSizeMax")
 	return &terminalCommitment{
-		bytes:               commitmentBytes,
-		isValueInCommitment: isValueInCommitment,
+		data:    commitmentBytes,
+		isValue: isValue,
 	}
 }
 
@@ -96,18 +106,18 @@ type hashVector [vectorLength][]byte
 // makeHashVector makes the node vector to be hashed. Missing children are nil
 func makeHashVector(nodeData *nodeData) *hashVector {
 	hashes := &hashVector{}
-	for i, c := range nodeData.ChildCommitments {
+	for i, c := range nodeData.children {
 		if c != nil {
 			hash := c.Hash()
 			hashes[i] = hash[:]
 		}
 	}
-	if nodeData.Terminal != nil {
+	if nodeData.terminal != nil {
 		// squeeze terminal it into the hash size, if longer than hash size
-		hashes[terminalCommitmentIndex], _ = compressToHashSize(nodeData.Terminal.Bytes())
+		hashes[terminalCommitmentIndex], _ = compressToHashSize(nodeData.terminal.Bytes())
 	}
-	pathFragmentCommitmentBytes, _ := compressToHashSize(nodeData.PathFragment)
-	hashes[pathFragmentCommitmentIndex] = pathFragmentCommitmentBytes
+	pathExtensionCommitmentBytes, _ := compressToHashSize(nodeData.pathExtension)
+	hashes[pathExtensionCommitmentIndex] = pathExtensionCommitmentBytes
 	return hashes
 }
 
@@ -172,8 +182,8 @@ var _ TCommitment = &terminalCommitment{}
 func newTerminalCommitment() *terminalCommitment {
 	// all 0 non hashed value
 	return &terminalCommitment{
-		bytes:               make([]byte, 0, HashSizeBytes),
-		isValueInCommitment: false,
+		data:    make([]byte, 0, HashSizeBytes),
+		isValue: false,
 	}
 }
 
@@ -182,26 +192,26 @@ func (t *terminalCommitment) Equals(c Commitment) bool {
 	if !ok {
 		return false
 	}
-	return bytes.Equal(t.bytes, t2.bytes)
+	return bytes.Equal(t.data, t2.data)
 }
 
 func (t *terminalCommitment) Clone() TCommitment {
 	return &terminalCommitment{
-		bytes:               concat(t.bytes),
-		isValueInCommitment: t.isValueInCommitment,
+		data:    concat(t.data),
+		isValue: t.isValue,
 	}
 }
 
 func (t *terminalCommitment) Write(w io.Writer) error {
-	size := byte(len(t.bytes))
-	assert(size <= terminalCommitmentSizeMax, "size <= terminalCommitmentSizeMax")
-	if t.isValueInCommitment {
-		size |= valueInCommitmentMask
+	assert(len(t.data) <= tCommitmentDataSizeMax, "size <= tCommitmentDataSizeMax")
+	size := byte(len(t.data))
+	if t.isValue {
+		size |= tCommitmentIsValueMask
 	}
 	if err := writeByte(w, size); err != nil {
 		return err
 	}
-	_, err := w.Write(t.bytes)
+	_, err := w.Write(t.data)
 	return err
 }
 
@@ -211,12 +221,12 @@ func (t *terminalCommitment) Read(r io.Reader) error {
 	if l, err = readByte(r); err != nil {
 		return err
 	}
-	t.isValueInCommitment = (l & valueInCommitmentMask) != 0
-	l &= terminalCommitmentSizeMax
+	t.isValue = (l & tCommitmentIsValueMask) != 0
+	l &= tCommitmentDataSizeMask
 	if l > 0 {
-		t.bytes = make([]byte, l)
+		t.data = make([]byte, l)
 
-		n, err := r.Read(t.bytes)
+		n, err := r.Read(t.data)
 		if err != nil {
 			return err
 		}
@@ -232,12 +242,12 @@ func (t *terminalCommitment) Bytes() []byte {
 }
 
 func (t *terminalCommitment) String() string {
-	return hex.EncodeToString(t.bytes[:])
+	return hex.EncodeToString(t.data[:])
 }
 
 func (t *terminalCommitment) ExtractValue() ([]byte, bool) {
-	if t.isValueInCommitment {
-		return t.bytes, true
+	if t.isValue {
+		return t.data, true
 	}
 	return nil, false
 }

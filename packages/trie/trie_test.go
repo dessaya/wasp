@@ -1,6 +1,7 @@
 package trie
 
 import (
+	"bytes"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -14,12 +15,11 @@ func TestBasic(t *testing.T) {
 
 	var root0 VCommitment
 	{
-		root0 = MustInitRoot(store, []byte("identity"))
+		root0 = MustInitRoot(store)
 	}
 	{
 		state, err := NewTrieReader(store, root0)
 		require.NoError(t, err)
-		require.Equal(t, []byte("identity"), state.Get([]byte("")))
 		require.EqualValues(t, []byte(nil), state.Get([]byte("a")))
 	}
 
@@ -38,7 +38,8 @@ func TestBasic(t *testing.T) {
 		require.NoError(t, err)
 		tr.Update([]byte("a"), nil)
 		tr.Update([]byte("b"), []byte("bb"))
-		tr.Update([]byte("c"), []byte("c"))
+		tr.Update([]byte("cccddd"), []byte("c"))
+		tr.Update([]byte("ccceee"), bytes.Repeat([]byte("c"), 70))
 		root2 = tr.Commit(store)
 		require.NoError(t, err)
 
@@ -51,53 +52,29 @@ func TestBasic(t *testing.T) {
 }
 
 func TestCreateTrie(t *testing.T) {
-	t.Run("wrong init-"+"", func(t *testing.T) {
-		store := NewInMemoryKVStore()
-		requirePanicOrErrorWith(t, func() error {
-			MustInitRoot(store, nil)
-			return nil
-		}, "identity of the root cannot be empty")
-	})
 	t.Run("ok init-"+"", func(t *testing.T) {
-		store := NewInMemoryKVStore()
-		const identity1 = "abc"
-		const identity2 = "abcabc"
-
-		rootC1 := MustInitRoot(store, []byte(identity1))
+		rootC1 := MustInitRoot(NewInMemoryKVStore())
 		require.NotNil(t, rootC1)
-		t.Logf("initial root commitment with id '%s': %s", identity1, rootC1)
 
-		rootC2 := MustInitRoot(store, []byte(identity2))
+		rootC2 := MustInitRoot(NewInMemoryKVStore())
 		require.NotNil(t, rootC2)
-		t.Logf("initial root commitment with id '%s': %s", identity2, rootC2)
 
-		require.False(t, rootC1.Equals(rootC2))
-	})
-	t.Run("ok init long id-"+"", func(t *testing.T) {
-		store := NewInMemoryKVStore()
-		identity := strings.Repeat("abc", 50)
-
-		rootC1 := MustInitRoot(store, []byte(identity))
-		require.NotNil(t, rootC1)
-		t.Logf("initial root commitment with id '%s': %s", identity, rootC1)
+		require.True(t, rootC1.Equals(rootC2))
 	})
 	t.Run("update 1"+"", func(t *testing.T) {
 		store := NewInMemoryKVStore()
 		const (
-			identity = "idIDidIDidID"
-			key      = "key"
-			value    = "value"
+			key   = "key"
+			value = "value"
 		)
 
-		rootInitial := MustInitRoot(store, []byte(identity))
+		rootInitial := MustInitRoot(store)
 		require.NotNil(t, rootInitial)
-		t.Logf("initial root commitment with id '%s': %s", identity, rootInitial)
 
 		tr, err := NewTrieUpdatable(store, rootInitial)
 		require.NoError(t, err)
 
-		v := tr.GetStr("")
-		require.EqualValues(t, identity, v)
+		require.Empty(t, tr.GetStr(""))
 
 		tr.UpdateStr(key, value)
 		rootCnext := tr.Commit(store)
@@ -106,10 +83,9 @@ func TestCreateTrie(t *testing.T) {
 
 		trInit, err := NewTrieReader(store, rootInitial)
 		require.NoError(t, err)
-		v = trInit.GetStr("")
-		require.EqualValues(t, identity, v)
+		require.Empty(t, trInit.GetStr(""))
 
-		v = tr.GetStr(key)
+		v := tr.GetStr(key)
 		require.EqualValues(t, value, v)
 
 		require.True(t, tr.HasStr(key))
@@ -117,20 +93,17 @@ func TestCreateTrie(t *testing.T) {
 	t.Run("update 2 long value"+"", func(t *testing.T) {
 		store := NewInMemoryKVStore()
 		const (
-			identity = "idIDidIDidID"
-			key      = "key"
-			value    = "value"
+			key   = "key"
+			value = "value"
 		)
 
-		rootInitial := MustInitRoot(store, []byte(identity))
+		rootInitial := MustInitRoot(store)
 		require.NotNil(t, rootInitial)
-		t.Logf("initial root commitment with id '%s': %s", identity, rootInitial)
 
 		tr, err := NewTrieUpdatable(store, rootInitial)
 		require.NoError(t, err)
 
-		v := tr.GetStr("")
-		require.EqualValues(t, identity, v)
+		require.Empty(t, tr.GetStr(""))
 
 		tr.UpdateStr(key, strings.Repeat(value, 500))
 		rootCnext := tr.Commit(store)
@@ -139,10 +112,9 @@ func TestCreateTrie(t *testing.T) {
 
 		require.True(t, rootCnext.Equals(tr.Root()))
 
-		v = tr.GetStr("")
-		require.EqualValues(t, identity, v)
+		require.Empty(t, tr.GetStr(""))
 
-		v = tr.GetStr(key)
+		v := tr.GetStr(key)
 		require.EqualValues(t, strings.Repeat(value, 500), v)
 
 		require.True(t, tr.HasStr(key))
@@ -150,14 +122,11 @@ func TestCreateTrie(t *testing.T) {
 }
 
 func TestBaseUpdate(t *testing.T) {
-	const identity = "idIDidIDidID"
-
 	runTest := func(data []string) {
 		t.Run("update many", func(t *testing.T) {
 			store := NewInMemoryKVStore()
-			rootInitial := MustInitRoot(store, []byte(identity))
+			rootInitial := MustInitRoot(store)
 			require.NotNil(t, rootInitial)
-			t.Logf("initial root commitment with id '%s': %s", identity, rootInitial)
 
 			tr, err := NewTrieUpdatable(store, rootInitial)
 			require.NoError(t, err)
@@ -264,14 +233,11 @@ func checkResult(t *testing.T, trie *TrieUpdatable, checklist map[string]string)
 }
 
 func TestBaseScenarios(t *testing.T) {
-	const identity = "idIDidIDidID"
-
 	tf := func(data []string) func(t *testing.T) {
 		return func(t *testing.T) {
 			store := NewInMemoryKVStore()
-			rootInitial := MustInitRoot(store, []byte(identity))
+			rootInitial := MustInitRoot(store)
 			require.NotNil(t, rootInitial)
-			t.Logf("initial root commitment with id '%s': %s", identity, rootInitial)
 
 			tr, err := NewTrieUpdatable(store, rootInitial)
 			require.NoError(t, err)
@@ -311,7 +277,7 @@ func TestBaseScenarios(t *testing.T) {
 func TestDeletionLoop(t *testing.T) {
 	runTest := func(initScenario, scenario []string) {
 		store := NewInMemoryKVStore()
-		beginRoot := MustInitRoot(store, []byte("ididididid"))
+		beginRoot := MustInitRoot(store)
 		tr, err := NewTrieUpdatable(store, beginRoot)
 		require.NoError(t, err)
 		t.Logf("TestDeletionLoop: model: '%s', init='%s', scenario='%s'", "", initScenario, scenario)
@@ -335,13 +301,11 @@ func TestDeletionLoop(t *testing.T) {
 }
 
 func TestDeterminism(t *testing.T) {
-	const identity = "idIDidIDidID"
-
 	tf := func(scenario1, scenario2 []string) func(t *testing.T) {
 		return func(t *testing.T) {
 			fmt.Printf("--------- scenario1: %v\n", scenario1)
 			store1 := NewInMemoryKVStore()
-			initRoot1 := MustInitRoot(store1, []byte(identity))
+			initRoot1 := MustInitRoot(store1)
 
 			tr1, err := NewTrieUpdatable(store1, initRoot1)
 			require.NoError(t, err)
@@ -351,7 +315,7 @@ func TestDeterminism(t *testing.T) {
 
 			fmt.Printf("--------- scenario2: %v\n", scenario2)
 			store2 := NewInMemoryKVStore()
-			initRoot2 := MustInitRoot(store2, []byte(identity))
+			initRoot2 := MustInitRoot(store2)
 
 			tr2, err := NewTrieUpdatable(store2, initRoot2)
 			require.NoError(t, err)
@@ -386,9 +350,8 @@ func TestIterate(t *testing.T) {
 	iterTest := func(scenario []string) func(t *testing.T) {
 		return func(t *testing.T) {
 			store := NewInMemoryKVStore()
-			rootInitial := MustInitRoot(store, []byte("identity"))
+			rootInitial := MustInitRoot(store)
 			require.NotNil(t, rootInitial)
-			t.Logf("initial root commitment with id '%s': %s", "identity", rootInitial)
 
 			tr, err := NewTrieUpdatable(store, rootInitial)
 			require.NoError(t, err)
@@ -403,13 +366,10 @@ func TestIterate(t *testing.T) {
 				if traceScenarios {
 					fmt.Printf("---- iter --- '%s': '%s'\n", string(k), string(v))
 				}
-				if len(k) != 0 {
-					vCheck := checklist[string(k)]
-					require.True(t, len(v) > 0)
-					require.EqualValues(t, []byte(vCheck), v)
-				} else {
-					require.EqualValues(t, []byte("identity"), v)
-				}
+				require.NotEmpty(t, k)
+				vCheck := checklist[string(k)]
+				require.True(t, len(v) > 0)
+				require.EqualValues(t, []byte(vCheck), v)
 				iteratedKeys1 = append(iteratedKeys1, k)
 				return true
 			})
@@ -444,9 +404,8 @@ func TestIteratePrefix(t *testing.T) {
 	iterTest := func(scenario []string, prefix string) func(t *testing.T) {
 		return func(t *testing.T) {
 			store := NewInMemoryKVStore()
-			rootInitial := MustInitRoot(store, []byte("identity"))
+			rootInitial := MustInitRoot(store)
 			require.NotNil(t, rootInitial)
-			t.Logf("initial root commitment with id '%s': %s", "identity", rootInitial)
 
 			tr, err := NewTrieUpdatable(store, rootInitial)
 			require.NoError(t, err)
@@ -461,9 +420,7 @@ func TestIteratePrefix(t *testing.T) {
 				if traceScenarios {
 					fmt.Printf("---- iter --- '%s': '%s'\n", string(k), string(v))
 				}
-				if string(v) != "identity" {
-					countIter++
-				}
+				countIter++
 				require.True(t, strings.HasPrefix(string(k), prefix))
 				return true
 			})
@@ -506,9 +463,8 @@ func TestDeletePrefix(t *testing.T) {
 	iterTest := func(scenario []string, prefix string) func(t *testing.T) {
 		return func(t *testing.T) {
 			store := NewInMemoryKVStore()
-			rootInitial := MustInitRoot(store, []byte("identity"))
+			rootInitial := MustInitRoot(store)
 			require.NotNil(t, rootInitial)
-			t.Logf("initial root commitment with id '%s': %s", "identity", rootInitial)
 
 			tr, err := NewTrieUpdatable(store, rootInitial)
 			require.NoError(t, err)
@@ -525,10 +481,7 @@ func TestDeletePrefix(t *testing.T) {
 				if traceScenarios {
 					fmt.Printf("---- iter --- '%s': '%s'\n", string(k), string(v))
 				}
-				if len(k) == 0 {
-					require.EqualValues(t, "identity", string(v))
-					return true
-				}
+				require.NotEmpty(t, k)
 				if deleted && len(prefix) != 0 {
 					require.False(t, strings.HasPrefix(string(k), prefix))
 				}
@@ -593,11 +546,10 @@ func reverse(orig []string) []string {
 }
 
 func TestSnapshot1(t *testing.T) {
-	id := []byte("idididid")
 	runTest := func(name string, data []string) {
 		t.Run(name, func(t *testing.T) {
 			store1 := NewInMemoryKVStore()
-			initRoot1 := MustInitRoot(store1, id)
+			initRoot1 := MustInitRoot(store1)
 			tr1, err := NewTrieUpdatable(store1, initRoot1)
 			require.NoError(t, err)
 
@@ -606,16 +558,12 @@ func TestSnapshot1(t *testing.T) {
 			tr1.SnapshotData(storeData)
 
 			store2 := NewInMemoryKVStore()
-			initRoot2 := MustInitRoot(store2, id)
+			initRoot2 := MustInitRoot(store2)
 			tr2, err := NewTrieUpdatable(store2, initRoot2)
 			require.NoError(t, err)
 
 			storeData.Iterate(func(k, v []byte) bool {
-				if len(k) == 0 {
-					require.EqualValues(t, id, v)
-				} else {
-					tr2.Update(k, v)
-				}
+				tr2.Update(k, v)
 				return true
 			})
 			root2 := tr2.Commit(store2)
@@ -630,7 +578,7 @@ func TestSnapshot1(t *testing.T) {
 func TestSnapshot2(t *testing.T) {
 	runTest := func(data []string) {
 		store1 := NewInMemoryKVStore()
-		initRoot1 := MustInitRoot(store1, []byte("idididid"))
+		initRoot1 := MustInitRoot(store1)
 		tr1, err := NewTrieUpdatable(store1, initRoot1)
 		require.NoError(t, err)
 
@@ -655,21 +603,4 @@ func TestSnapshot2(t *testing.T) {
 		data := genRnd3()
 		runTest(data)
 	}
-}
-
-func TestDontChangeIdentity(t *testing.T) {
-	db := NewInMemoryKVStore()
-	root1 := func() VCommitment {
-		id1 := []byte("id1")
-		return MustInitRoot(db, id1)
-	}()
-
-	err := catchPanicOrError(func() error {
-		tr, err := NewTrieUpdatable(db, root1)
-		require.NoError(t, err)
-		tr.Update([]byte(""), []byte("new identity"))
-		tr.Commit(db)
-		return nil
-	})
-	requireErrorWith(t, err, "identity of the state can't be changed")
 }

@@ -27,9 +27,6 @@ var (
 	ErrUnknownLatestTrieRoot = errors.New("latest trie root is unknown")
 )
 
-// trieIdentity is the value assigned to the empty key in trie.go. It can be any non-empty value.
-var trieIdentity = []byte{0}
-
 func keyBlockByTrieRoot(root trie.VCommitment) []byte {
 	return append([]byte{prefixBlockByTrieRoot}, root.Bytes()...)
 }
@@ -80,7 +77,7 @@ func (db *storeDB) trieUpdatable(root trie.VCommitment) (*trie.TrieUpdatable, er
 }
 
 func (db *storeDB) initTrie() trie.VCommitment {
-	return trie.MustInitRoot(db.trieStore(), trieIdentity)
+	return trie.MustInitRoot(db.trieStore())
 }
 
 func (db *storeDB) trieReader(root trie.VCommitment) (*trie.TrieReader, error) {

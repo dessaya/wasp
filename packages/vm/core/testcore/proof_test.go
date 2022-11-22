@@ -44,7 +44,6 @@ func TestProofs(t *testing.T) {
 		err = proof.ValidateValue(ch.GetL1Commitment().TrieRoot, data)
 		require.NoError(t, err)
 		t.Logf("key size = %d", len(key))
-		t.Logf("proof size = %d", len(proof.Bytes()))
 	})
 	t.Run("check PoI receipt", func(t *testing.T) {
 		env := solo.New(t)
@@ -64,7 +63,6 @@ func TestProofs(t *testing.T) {
 		err = proof.ValidateValue(ch.GetL1Commitment().TrieRoot, rec.Bytes())
 
 		require.NoError(t, err)
-		t.Logf("proof size = %d", len(proof.Bytes()))
 	})
 	t.Run("check PoI past state", func(t *testing.T) {
 		env := solo.New(t)
@@ -90,7 +88,6 @@ func TestProofs(t *testing.T) {
 		err = proof.ValidateValue(ch.GetL1Commitment().TrieRoot, bi.Bytes())
 
 		require.NoError(t, err)
-		t.Logf("proof size = %d", len(proof.Bytes()))
 
 		require.True(t, pastL1Commitment.TrieRoot.Equals(bi.L1Commitment.TrieRoot))
 	})
@@ -118,7 +115,6 @@ func TestProofs(t *testing.T) {
 		err = poi.ValidateValue(ch.GetL1Commitment().TrieRoot, pastBlockInfo.Bytes())
 
 		require.NoError(t, err)
-		t.Logf("proof size = %d", len(poi.Bytes()))
 	})
 }
 

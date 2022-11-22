@@ -37,7 +37,7 @@ func (p *MerkleProof) MustKeyWithTerminal() ([]byte, []byte) {
 			return p.Key, nil
 		}
 		return p.Key, lastElem.Terminal
-	case lastElem.ChildIndex == pathFragmentCommitmentIndex:
+	case lastElem.ChildIndex == pathExtensionCommitmentIndex:
 		return p.Key, nil
 	}
 	panic("wrong lastElem.ChildIndex")
@@ -88,7 +88,7 @@ func (p *MerkleProof) verify(pathIdx, keyIdx int) (Hash, error) {
 
 	elem := p.Path[pathIdx]
 	tail := p.Key[keyIdx:]
-	isPrefix := bytes.HasPrefix(tail, elem.PathFragment)
+	isPrefix := bytes.HasPrefix(tail, elem.PathExtension)
 	last := pathIdx == len(p.Path)-1
 	if !last && !isPrefix {
 		return Hash{}, fmt.Errorf("wrong proof: proof path does not follow the key. Path position: %d, key position %d", pathIdx, keyIdx)
@@ -101,7 +101,7 @@ func (p *MerkleProof) verify(pathIdx, keyIdx int) (Hash, error) {
 		if elem.Children[byte(elem.ChildIndex)] != nil {
 			return Hash{}, fmt.Errorf("wrong proof: unexpected commitment at child index %d. Path position: %d, key position %d", elem.ChildIndex, pathIdx, keyIdx)
 		}
-		nextKeyIdx := keyIdx + len(elem.PathFragment) + 1
+		nextKeyIdx := keyIdx + len(elem.PathExtension) + 1
 		if nextKeyIdx > len(p.Key) {
 			return Hash{}, fmt.Errorf("wrong proof: proof path out of key bounds. Path position: %d, key position %d", pathIdx, keyIdx)
 		}
@@ -118,9 +118,9 @@ func (p *MerkleProof) verify(pathIdx, keyIdx int) (Hash, error) {
 		}
 		return elem.hash(nil)
 	}
-	if elem.ChildIndex != terminalCommitmentIndex && elem.ChildIndex != pathFragmentCommitmentIndex {
+	if elem.ChildIndex != terminalCommitmentIndex && elem.ChildIndex != pathExtensionCommitmentIndex {
 		return Hash{}, fmt.Errorf("wrong proof: child index expected to be %d or %d. Path position: %d, key position %d",
-			terminalCommitmentIndex, pathFragmentCommitmentIndex, pathIdx, keyIdx)
+			terminalCommitmentIndex, pathExtensionCommitmentIndex, pathIdx, keyIdx)
 	}
 	return elem.hash(nil)
 }
@@ -147,8 +147,8 @@ func (e *MerkleProofElement) makeHashVector(missingCommitment []byte) (*hashVect
 		}
 		hashes[terminalCommitmentIndex] = e.Terminal
 	}
-	rawBytes, _ := compressToHashSize(e.PathFragment)
-	hashes[pathFragmentCommitmentIndex] = rawBytes
+	rawBytes, _ := compressToHashSize(e.PathExtension)
+	hashes[pathExtensionCommitmentIndex] = rawBytes
 	if isValidChildIndex(e.ChildIndex) {
 		if len(missingCommitment) > HashSizeBytes {
 			return nil, fmt.Errorf(errTooLongCommitment+" (skipped commitment)", e.ChildIndex, HashSizeBytes)

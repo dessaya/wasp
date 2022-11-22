@@ -2,7 +2,6 @@ package trie
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 )
@@ -16,17 +15,30 @@ func isValidChildIndex(i int) bool {
 	return i >= 0 && i < NumChildren
 }
 
-// nodeData contains all data trie node needs to compute commitment
+// nodeData represents a node of the trie, which is stored in the trieStore
+// with key = commitment.Bytes()
 type nodeData struct {
-	PathFragment     []byte
-	Terminal         TCommitment
-	ChildCommitments [NumChildren]VCommitment
-	// persisted in the key
-	Commitment VCommitment
+	// if pathExtension != nil, this is an extension node (i.e. if there are
+	// no branching nodes along the pathExtension).
+	// See https://ethereum.org/en/developers/docs/data-structures-and-encoding/patricia-merkle-trie/#optimization
+	pathExtension []byte
+
+	// if terminal != nil, it contains the commitment to a value in the trie
+	terminal TCommitment
+
+	// children contains pointers to up to 16 other nodes, one for each
+	// possible nibble
+	children [NumChildren]VCommitment
+
+	// commitment is the hash(node), which is persisted in the key
+	commitment VCommitment
 }
 
 func newNodeData() *nodeData {
-	return &nodeData{}
+	n := &nodeData{}
+	v := vectorCommitment(makeHashVector(n).Hash())
+	n.commitment = &v
+	return n
 }
 
 func nodeDataFromBytes(data []byte) (*nodeData, error) {
@@ -44,7 +56,7 @@ func nodeDataFromBytes(data []byte) (*nodeData, error) {
 
 func (n *nodeData) ChildrenCount() int {
 	count := 0
-	for _, c := range n.ChildCommitments {
+	for _, c := range n.children {
 		if c != nil {
 			count++
 		}
@@ -55,17 +67,17 @@ func (n *nodeData) ChildrenCount() int {
 // Clone deep copy
 func (n *nodeData) Clone() *nodeData {
 	ret := &nodeData{
-		PathFragment: concat(n.PathFragment),
+		pathExtension: concat(n.pathExtension),
 	}
-	if n.Terminal != nil {
-		ret.Terminal = n.Terminal.Clone()
+	if n.terminal != nil {
+		ret.terminal = n.terminal.Clone()
 	}
-	if n.Commitment != nil {
-		ret.Commitment = n.Commitment.Clone()
+	if n.commitment != nil {
+		ret.commitment = n.commitment.Clone()
 	}
-	for i, c := range n.ChildCommitments {
+	for i, c := range n.children {
 		if c != nil {
-			ret.ChildCommitments[i] = c.Clone()
+			ret.children[i] = c.Clone()
 		}
 	}
 	return ret
@@ -73,27 +85,26 @@ func (n *nodeData) Clone() *nodeData {
 
 func (n *nodeData) String() string {
 	t := "<nil>"
-	if n.Terminal != nil {
-		t = n.Terminal.String()
+	if n.terminal != nil {
+		t = n.terminal.String()
 	}
 	childIdx := make([]byte, 0)
-	for i := range n.ChildCommitments {
-		if n.ChildCommitments[i] != nil {
+	for i := range n.children {
+		if n.children[i] != nil {
 			childIdx = append(childIdx, byte(i))
 		}
 	}
 	return fmt.Sprintf("c: %s, pf: '%s', childrenIdx: %v, term: '%s'",
-		n.Commitment, string(n.PathFragment), childIdx, t)
+		n.commitment, string(n.pathExtension), childIdx, t)
 }
 
 // Read/Write implements optimized serialization of the trie node
 // The serialization of the node takes advantage of the fact that most of the
 // nodes has just few children.
 // the 'smallFlags' (1 byte) contains information:
-// - 'serializeChildrenFlag' does node contain at least one child
-// - 'terminalExistsFlag' is optimization case when commitment to the terminal == commitment to the unpackedKey
-//    In this case terminal is not serialized
-// - 'serializePathFragmentFlag' flag means node has non-empty path fragment
+// - 'hasChildrenFlag' does node contain at least one child
+// - 'isTerminalNodeFlag' means that the node contains a terminal commitment
+// - 'isExtensionNodeFlag' means that the node has a non-empty path extension
 // By the semantics of the trie, 'smallFlags' cannot be 0
 // 'childrenFlags' (2 bytes array or 16 bits) are only present if node contains at least one child commitment
 // In this case:
@@ -101,9 +112,9 @@ func (n *nodeData) String() string {
 // at the index i/8. The bit position in the byte is i % 8
 
 const (
-	terminalExistsFlag = 1 << iota
-	serializeChildrenFlag
-	serializePathFragmentFlag
+	isTerminalNodeFlag = 1 << iota
+	hasChildrenFlag
+	isExtensionNodeFlag
 )
 
 // cflags 16 flags, one for each child
@@ -129,51 +140,48 @@ func (fl cflags) hasFlag(i byte) bool {
 // Write serialized node data
 func (n *nodeData) Write(w io.Writer) error {
 	var smallFlags byte
-	if n.Terminal != nil {
-		smallFlags |= terminalExistsFlag
+	if n.terminal != nil {
+		smallFlags |= isTerminalNodeFlag
 	}
 
 	childrenFlags := cflags(0)
 	// compress children childrenFlags 32 bytes, if any
-	for i := range n.ChildCommitments {
-		if n.ChildCommitments[i] != nil {
+	for i := range n.children {
+		if n.children[i] != nil {
 			childrenFlags.setFlag(byte(i))
 		}
 	}
 
 	if childrenFlags != 0 {
-		smallFlags |= serializeChildrenFlag
+		smallFlags |= hasChildrenFlag
 	}
-	if smallFlags == 0 {
-		return errors.New("non-committing node can't be serialized")
-	}
-	var pathFragmentEncoded []byte
+	var pathExtensionEncoded []byte
 	var err error
-	if len(n.PathFragment) > 0 {
-		smallFlags |= serializePathFragmentFlag
-		if pathFragmentEncoded, err = encodeUnpackedBytes(n.PathFragment); err != nil {
+	if len(n.pathExtension) > 0 {
+		smallFlags |= isExtensionNodeFlag
+		if pathExtensionEncoded, err = encodeUnpackedBytes(n.pathExtension); err != nil {
 			return err
 		}
 	}
 	if err = writeByte(w, smallFlags); err != nil {
 		return err
 	}
-	if smallFlags&serializePathFragmentFlag != 0 {
-		if err = writeBytes16(w, pathFragmentEncoded); err != nil {
+	if smallFlags&isExtensionNodeFlag != 0 {
+		if err = writeBytes16(w, pathExtensionEncoded); err != nil {
 			return err
 		}
 	}
-	if smallFlags&terminalExistsFlag != 0 {
-		if err = n.Terminal.Write(w); err != nil {
+	if smallFlags&isTerminalNodeFlag != 0 {
+		if err = n.terminal.Write(w); err != nil {
 			return err
 		}
 	}
 	// write child commitments if any
-	if smallFlags&serializeChildrenFlag != 0 {
+	if smallFlags&hasChildrenFlag != 0 {
 		if err = writeUint16(w, uint16(childrenFlags)); err != nil {
 			return err
 		}
-		for _, child := range n.ChildCommitments {
+		for _, child := range n.children {
 			if child != nil {
 				if err = child.Write(w); err != nil {
 					return err
@@ -191,25 +199,25 @@ func (n *nodeData) Read(r io.Reader) error {
 	if smallFlags, err = readByte(r); err != nil {
 		return err
 	}
-	if smallFlags&serializePathFragmentFlag != 0 {
+	if smallFlags&isExtensionNodeFlag != 0 {
 		encoded, err := readBytes16(r)
 		if err != nil {
 			return err
 		}
-		if n.PathFragment, err = decodeToUnpackedBytes(encoded); err != nil {
+		if n.pathExtension, err = decodeToUnpackedBytes(encoded); err != nil {
 			return err
 		}
 	} else {
-		n.PathFragment = nil
+		n.pathExtension = nil
 	}
-	n.Terminal = nil
-	if smallFlags&terminalExistsFlag != 0 {
-		n.Terminal = newTerminalCommitment()
-		if err = n.Terminal.Read(r); err != nil {
+	n.terminal = nil
+	if smallFlags&isTerminalNodeFlag != 0 {
+		n.terminal = newTerminalCommitment()
+		if err = n.terminal.Read(r); err != nil {
 			return err
 		}
 	}
-	if smallFlags&serializeChildrenFlag != 0 {
+	if smallFlags&hasChildrenFlag != 0 {
 		var flags cflags
 		if flags, err = readCflags(r); err != nil {
 			return err
@@ -217,8 +225,8 @@ func (n *nodeData) Read(r io.Reader) error {
 		for i := 0; i < NumChildren; i++ {
 			ib := uint8(i)
 			if flags.hasFlag(ib) {
-				n.ChildCommitments[ib] = newVectorCommitment()
-				if err = n.ChildCommitments[ib].Read(r); err != nil {
+				n.children[ib] = newVectorCommitment()
+				if err = n.children[ib].Read(r); err != nil {
 					return err
 				}
 			}
@@ -228,7 +236,7 @@ func (n *nodeData) Read(r io.Reader) error {
 }
 
 func (n *nodeData) iterateChildren(f func(byte, VCommitment) bool) bool {
-	for i, v := range n.ChildCommitments {
+	for i, v := range n.children {
 		if v != nil {
 			if !f(byte(i), v) {
 				return false

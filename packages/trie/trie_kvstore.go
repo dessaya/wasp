@@ -7,7 +7,7 @@ import (
 
 // Update updates TrieUpdatable with the unpackedKey/value. Reorganizes and re-calculates trie, keeps cache consistent
 func (tr *TrieUpdatable) Update(key []byte, value []byte) {
-	assert(len(key) > 0, "identity of the state can't be changed")
+	assert(len(key) > 0, "len(key) must be > 0")
 	unpackedTriePath := unpackBytes(key)
 	if len(value) == 0 {
 		tr.delete(unpackedTriePath)
@@ -41,8 +41,8 @@ func (tr *TrieReader) Get(key []byte) []byte {
 	unpackedTriePath := unpackBytes(key)
 	var terminal TCommitment
 	tr.traversePath(unpackedTriePath, func(n *nodeData, _ []byte, ending pathEndingCode) {
-		if ending == endingTerminal && n.Terminal != nil {
-			terminal = n.Terminal
+		if ending == endingTerminal && n.terminal != nil {
+			terminal = n.terminal
 		}
 	})
 	if terminal == nil {
@@ -66,7 +66,7 @@ func (tr *TrieReader) Has(key []byte) bool {
 	found := false
 	tr.traversePath(unpackedTriePath, func(n *nodeData, _ []byte, ending pathEndingCode) {
 		if ending == endingTerminal {
-			if n.Terminal != nil {
+			if n.terminal != nil {
 				found = true
 			}
 		}
@@ -124,16 +124,16 @@ func (tr *TrieReader) Snapshot(destStore KVWriter) {
 		var buf bytes.Buffer
 		err := n.Write(&buf)
 		assertNoError(err)
-		triePartition.Set(n.Commitment.Bytes(), buf.Bytes())
+		triePartition.Set(n.commitment.Bytes(), buf.Bytes())
 
-		if n.Terminal == nil {
+		if n.terminal == nil {
 			return true
 		}
 		// write value if needed
-		if _, valueInCommitment := n.Terminal.ExtractValue(); valueInCommitment {
+		if _, valueInCommitment := n.terminal.ExtractValue(); valueInCommitment {
 			return true
 		}
-		valueKey := n.Terminal.Bytes()
+		valueKey := n.terminal.Bytes()
 		value := tr.nodeStore.valueStore.Get(valueKey)
 		assert(len(value) > 0, "can't find value for nodeKey '%s'", hex.EncodeToString(valueKey))
 		valuePartition.Set(valueKey, value)
@@ -162,12 +162,12 @@ func (tr *TrieUpdatable) update(triePath []byte, value []byte) {
 
 	case endingExtend:
 		// extend the current node with the new terminal node
-		keyPlusPathFragment := concat(lastNode.triePath, lastNode.pathFragment)
-		assert(len(keyPlusPathFragment) < len(triePath), "len(keyPlusPathFragment) < len(triePath)")
-		childTriePath := triePath[:len(keyPlusPathFragment)+1]
+		keyPlusPathExtension := concat(lastNode.triePath, lastNode.pathExtension)
+		assert(len(keyPlusPathExtension) < len(triePath), "len(keyPlusPathExtension) < len(triePath)")
+		childTriePath := triePath[:len(keyPlusPathExtension)+1]
 		childIndex := childTriePath[len(childTriePath)-1]
 		assert(lastNode.getChild(childIndex, tr.nodeStore) == nil, "lastNode.getChild(childIndex, tr.nodeStore)==nil")
-		child := tr.newTerminalNode(childTriePath, triePath[len(keyPlusPathFragment)+1:], value)
+		child := tr.newTerminalNode(childTriePath, triePath[len(keyPlusPathExtension)+1:], value)
 		lastNode.setModifiedChild(child)
 
 	case endingSplit:
@@ -180,18 +180,18 @@ func (tr *TrieUpdatable) update(triePath []byte, value []byte) {
 		assert(len(trieKey) <= len(triePath), "len(trieKey) <= len(triePath)")
 		remainingTriePath := triePath[len(trieKey):]
 
-		prefix, pathFragmentTail, triePathTail := commonPrefix(lastNode.pathFragment, remainingTriePath)
+		prefix, pathExtensionTail, triePathTail := commonPrefix(lastNode.pathExtension, remainingTriePath)
 
-		childIndexContinue := pathFragmentTail[0]
-		pathFragmentContinue := pathFragmentTail[1:]
+		childIndexContinue := pathExtensionTail[0]
+		pathExtensionContinue := pathExtensionTail[1:]
 		trieKeyToContinue := concat(trieKey, prefix, []byte{childIndexContinue})
 
 		prevNode.removeChild(lastNode)
-		lastNode.setPathFragment(pathFragmentContinue)
+		lastNode.setPathExtension(pathExtensionContinue)
 		lastNode.setTriePath(trieKeyToContinue)
 
 		forkingNode := newBufferedNode(nil, trieKey) // will be at path of the old node
-		forkingNode.setPathFragment(prefix)
+		forkingNode.setPathExtension(prefix)
 		forkingNode.setModifiedChild(lastNode)
 		prevNode.setModifiedChild(forkingNode)
 
@@ -199,10 +199,10 @@ func (tr *TrieUpdatable) update(triePath []byte, value []byte) {
 			forkingNode.setValue(value)
 		} else {
 			childIndexToBranch := triePathTail[0]
-			branchPathFragment := triePathTail[1:]
+			branchPathExtension := triePathTail[1:]
 			trieKeyToContinue = concat(trieKey, prefix, []byte{childIndexToBranch})
 
-			newNodeWithTerminal := tr.newTerminalNode(trieKeyToContinue, branchPathFragment, value)
+			newNodeWithTerminal := tr.newTerminalNode(trieKeyToContinue, branchPathExtension, value)
 			forkingNode.setModifiedChild(newNodeWithTerminal)
 		}
 
@@ -249,8 +249,8 @@ func (tr *TrieUpdatable) mergeNodeIfNeeded(node *bufferedNode) *bufferedNode {
 		return nil
 	}
 	// merge with child
-	newPathFragment := concat(node.pathFragment, []byte{theOnlyChildToMergeWith.indexAsChild()}, theOnlyChildToMergeWith.pathFragment)
-	theOnlyChildToMergeWith.setPathFragment(newPathFragment)
+	newPathExtension := concat(node.pathExtension, []byte{theOnlyChildToMergeWith.indexAsChild()}, theOnlyChildToMergeWith.pathExtension)
+	theOnlyChildToMergeWith.setPathExtension(newPathExtension)
 	theOnlyChildToMergeWith.setTriePath(node.triePath)
 	return theOnlyChildToMergeWith
 }
@@ -262,8 +262,8 @@ func (tr *TrieReader) iteratePrefix(f func(k []byte, v []byte) bool, prefix []by
 	var triePath []byte
 	unpackedPrefix := unpackBytes(prefix)
 	tr.traversePath(unpackedPrefix, func(n *nodeData, trieKey []byte, ending pathEndingCode) {
-		if bytes.HasPrefix(concat(trieKey, n.PathFragment), unpackedPrefix) {
-			root = n.Commitment
+		if bytes.HasPrefix(concat(trieKey, n.pathExtension), unpackedPrefix) {
+			root = n.commitment
 			triePath = trieKey
 		}
 	})
@@ -274,16 +274,16 @@ func (tr *TrieReader) iteratePrefix(f func(k []byte, v []byte) bool, prefix []by
 
 func (tr *TrieReader) iterate(root VCommitment, triePath []byte, fun func(k []byte, v []byte) bool, extractValue bool) bool {
 	return tr.iterateNodes(root, triePath, func(nodeKey []byte, n *nodeData) bool {
-		if n.Terminal != nil {
-			key, err := packUnpackedBytes(concat(nodeKey, n.PathFragment))
+		if n.terminal != nil {
+			key, err := packUnpackedBytes(concat(nodeKey, n.pathExtension))
 			assertNoError(err)
 			var value []byte
 			if extractValue {
 				var inTheCommitment bool
-				value, inTheCommitment = n.Terminal.ExtractValue()
+				value, inTheCommitment = n.terminal.ExtractValue()
 				if !inTheCommitment {
-					value = tr.nodeStore.valueStore.Get(n.Terminal.Bytes())
-					assert(len(value) > 0, "can't fetch value. triePath: '%s', data commitment: %s", hex.EncodeToString(key), n.Terminal)
+					value = tr.nodeStore.valueStore.Get(n.terminal.Bytes())
+					assert(len(value) > 0, "can't fetch value. triePath: '%s', data commitment: %s", hex.EncodeToString(key), n.terminal)
 				}
 			}
 			if !fun(key, value) {
@@ -303,7 +303,7 @@ func (tr *TrieReader) iterateNodes(root VCommitment, rootKey []byte, fun func(no
 		return false
 	}
 	return n.iterateChildren(func(childIndex byte, childCommitment VCommitment) bool {
-		return tr.iterateNodes(childCommitment, concat(rootKey, n.PathFragment, []byte{childIndex}), fun)
+		return tr.iterateNodes(childCommitment, concat(rootKey, n.pathExtension, []byte{childIndex}), fun)
 	})
 }
 
@@ -316,7 +316,7 @@ func (tr *TrieUpdatable) deletePrefix(pathPrefix []byte) bool {
 	prefixExists := false
 	tr.traverseMutatedPath(pathPrefix, func(n *bufferedNode, ending pathEndingCode) {
 		nodes = append(nodes, n)
-		if bytes.HasPrefix(concat(n.triePath, n.nodeData.PathFragment), pathPrefix) {
+		if bytes.HasPrefix(concat(n.triePath, n.nodeData.pathExtension), pathPrefix) {
 			prefixExists = true
 		}
 	})
@@ -334,7 +334,7 @@ func (tr *TrieUpdatable) deletePrefix(pathPrefix []byte) bool {
 			lastNode.uncommittedChildren[byte(i)] = nil
 			continue
 		}
-		if c := lastNode.nodeData.ChildCommitments[i]; c != nil {
+		if c := lastNode.nodeData.children[i]; c != nil {
 			lastNode.uncommittedChildren[byte(i)] = nil
 		}
 	}

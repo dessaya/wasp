@@ -1,11 +1,8 @@
 @startuml
-
 struct TrieReader {
+  nodeStore: nodeStore
+  root: VCommitment
 }
-
-interface VCommitment {}
-
-interface TCommitment {}
 
 struct nodeStore {
   trieStore: KVReader
@@ -13,30 +10,30 @@ struct nodeStore {
 }
 
 struct nodeData {
-  {field} PathFragment: []byte (nibbles)
-  Terminal: TCommitment
-  Commitment: VCommitment
-  Children: [16]VCommitment
+  {field} pathExtension: []byte
+  terminal: TCommitment
+  commitment: VCommitment
+  children: [16]VCommitment
 }
 
 struct terminalCommitment {
-  bytes: []byte
-  containsValue: bool
+  data: []byte
+  isValue: bool
 }
 
-note top of terminalCommitment
-  bytes is either:
-  - value
-  - hash(value)[1:]
+note right of terminalCommitment
+  data is either:
+  - value (if len(value) < 63)
+  - hash(value)
   
-  serialized as [flag|size|data]
+  serialized as [header|data]
+  where header = [isValue (1 bit) | len(data) (7 bits)]
 end note
 
 struct vectorCommitment {}
 
-note top of vectorCommitment
-  [20]byte
-  (hash)
+note left of vectorCommitment
+  [20]byte hash
 end note
 
 package db <<Database>> {
@@ -47,14 +44,12 @@ package db <<Database>> {
 }
 
 TrieReader *-- nodeStore
-TrieReader *-- VCommitment: root
-nodeStore ..> db
-nodeData ..> trieStore: "key=Commitment.Bytes()"
-terminalCommitment ..> valueStore: "key=Terminal.Bytes()\n(if flag == false)"
-nodeData "1" *-- "1" TCommitment: Terminal
-nodeData "1" *-- "1" VCommitment: Commitment
-nodeData "1" *-- "16" VCommitment: Children
-vectorCommitment --|> VCommitment
-terminalCommitment --|> TCommitment
+TrieReader *-- vectorCommitment: root
+nodeData ..> trieStore: "k=Commitment.Bytes()\nv=nodeData.Bytes()"
+nodeData ..> valueStore: "(if !terminal.isValue)\nk=hash(terminal.value)\nv=terminal.value"
+nodeData "1" *-- "1" terminalCommitment: Terminal
+nodeData "1" *-- "1" vectorCommitment: Commitment
+nodeData "1" *-- "16" vectorCommitment: Children
+nodeStore ..> nodeData: creates
 
 @enduml

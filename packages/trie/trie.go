@@ -83,15 +83,15 @@ func (tr *TrieUpdatable) Commit(store KVWriter) VCommitment {
 	// set uncommitted children in the root to empty -> the GC will collect the whole tree of buffered nodes
 	tr.mutatedRoot.uncommittedChildren = make(map[byte]*bufferedNode)
 
-	ret := tr.mutatedRoot.nodeData.Commitment.Clone()
+	ret := tr.mutatedRoot.nodeData.commitment.Clone()
 	err := tr.setRoot(ret) // always clear cache because NodeData-s are mutated and not valid anymore
 	assertNoError(err)
 	return ret
 }
 
-func (tr *TrieUpdatable) newTerminalNode(triePath, pathFragment, value []byte) *bufferedNode {
+func (tr *TrieUpdatable) newTerminalNode(triePath, pathExtension, value []byte) *bufferedNode {
 	ret := newBufferedNode(nil, triePath)
-	ret.setPathFragment(pathFragment)
+	ret.setPathExtension(pathExtension)
 	ret.setValue(value)
 	return ret
 }
