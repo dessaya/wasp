@@ -168,11 +168,8 @@ func (v *vectorCommitment) String() string {
 	return hex.EncodeToString(v[:])
 }
 
-func (v *vectorCommitment) Equals(c Commitment) bool {
-	v2, ok := c.(*vectorCommitment)
-	if !ok {
-		return false
-	}
+func (v *vectorCommitment) Equals(o VCommitment) bool {
+	v2 := o.(*vectorCommitment)
 	return *v == *v2
 }
 
@@ -187,11 +184,8 @@ func newTerminalCommitment() *terminalCommitment {
 	}
 }
 
-func (t *terminalCommitment) Equals(c Commitment) bool {
-	t2, ok := c.(*terminalCommitment)
-	if !ok {
-		return false
-	}
+func (t *terminalCommitment) Equals(o TCommitment) bool {
+	t2 := o.(*terminalCommitment)
 	return bytes.Equal(t.data, t2.data)
 }
 

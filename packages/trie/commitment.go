@@ -10,19 +10,21 @@ type Commitment interface {
 	Write(w io.Writer) error
 	Bytes() []byte
 	String() string
-	Equals(Commitment) bool
 }
 
-// VCommitment represents interface to the vector commitment. It can be hash, or it can be a curve element
+// VCommitment (vector commitment) is a 20 bytes hash commitment to a trie node
 type VCommitment interface {
 	Commitment
 	Hash() Hash
+	Equals(VCommitment) bool
 	Clone() VCommitment
 }
 
-// TCommitment represents commitment to the terminal data. Usually it is a hash of the data of a scalar field element
+// TCommitment (terminal commitment) is the commitment to the data stored in a
+// trie node.
 type TCommitment interface {
-	ExtractValue() ([]byte, bool)
 	Commitment
+	ExtractValue() ([]byte, bool)
+	Equals(TCommitment) bool
 	Clone() TCommitment
 }
