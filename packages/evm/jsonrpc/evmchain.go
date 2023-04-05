@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"sort"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/labstack/gommon/log"
+	"github.com/samber/lo"
 
 	"github.com/iotaledger/hive.go/logger"
 	"github.com/iotaledger/hive.go/runtime/event"
@@ -28,6 +31,7 @@ import (
 	"github.com/iotaledger/wasp/packages/publisher"
 	"github.com/iotaledger/wasp/packages/state"
 	"github.com/iotaledger/wasp/packages/util"
+	"github.com/iotaledger/wasp/packages/util/pipe"
 	"github.com/iotaledger/wasp/packages/vm/core/blocklog"
 	vmerrors "github.com/iotaledger/wasp/packages/vm/core/errors"
 	"github.com/iotaledger/wasp/packages/vm/core/evm"
@@ -54,45 +58,86 @@ func NewEVMChain(backend ChainBackend, pub *publisher.Publisher, log *logger.Log
 		log:      log,
 	}
 
+	publishedBlocks := pipe.NewInfinitePipe[*blocklog.BlockInfo]()
+
 	pub.Events.NewBlock.Hook(func(ev *publisher.ISCEvent[*blocklog.BlockInfo]) {
 		if !ev.ChainID.Equals(*e.backend.ISCChainID()) {
 			return
 		}
-		state, err := e.backend.ISCStateByBlockIndex(ev.Payload.BlockIndex())
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		blockNumber := new(big.Int).SetUint64(evmBlockNumberByISCBlockIndex(ev.Payload.BlockIndex()))
-		block, err := e.blockByNumber(state, blockNumber)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-
-		q := &ethereum.FilterQuery{
-			FromBlock: blockNumber,
-			ToBlock:   blockNumber,
-		}
-		ret, err := e.backend.ISCCallView(state, evm.Contract.Name, evm.FuncGetLogs.Name, dict.Dict{
-			evm.FieldFilterQuery: evmtypes.EncodeFilterQuery(q),
-		})
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		logs, err := evmtypes.DecodeLogs(ret.Get(evm.FieldResult))
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		e.newBlock.Trigger(&NewBlockEvent{
-			block: block,
-			logs:  logs,
-		})
+		publishedBlocks.In() <- ev.Payload
 	})
 
+	// single goroutine to fetch and publish blocks to ws listeners in order
+	go func() {
+		lastPublished := -1
+		var queue []int
+		for {
+			// blocks received from the publisher may be out of order?
+			blockIndex := (<-publishedBlocks.Out()).BlockIndex()
+
+			// enqueue, sort and remove duplicates
+			queue = append(queue, int(blockIndex))
+			sort.Ints(queue)
+			queue = lo.Uniq(queue)
+			if lastPublished >= 0 {
+				queue = lo.Filter(queue, func(item int, index int) bool {
+					return item > lastPublished
+				})
+			}
+
+			// publish all remaining blocks making sure they are published in order
+			for len(queue) > 0 {
+				nextInQueue := queue[0]
+				if lastPublished >= 0 && nextInQueue != lastPublished+1 && len(queue) < 10 {
+					break
+				}
+				if lastPublished >= 0 && len(queue) >= 10 {
+					e.log.Warn("blocks between %d and %d missed from publisher?", lastPublished, nextInQueue)
+				}
+
+				e.publishNewBlock(uint32(nextInQueue))
+				lastPublished = nextInQueue
+				queue = queue[1:]
+			}
+		}
+	}()
+
 	return e
+}
+
+func (e *EVMChain) publishNewBlock(blockIndex uint32) {
+	state, err := e.backend.ISCStateByBlockIndex(blockIndex)
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	blockNumber := new(big.Int).SetUint64(evmBlockNumberByISCBlockIndex(blockIndex))
+	block, err := e.blockByNumber(state, blockNumber)
+	if err != nil {
+		log.Error(err)
+		return
+	}
+
+	q := &ethereum.FilterQuery{
+		FromBlock: blockNumber,
+		ToBlock:   blockNumber,
+	}
+	ret, err := e.backend.ISCCallView(state, evm.Contract.Name, evm.FuncGetLogs.Name, dict.Dict{
+		evm.FieldFilterQuery: evmtypes.EncodeFilterQuery(q),
+	})
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	logs, err := evmtypes.DecodeLogs(ret.Get(evm.FieldResult))
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	e.newBlock.Trigger(&NewBlockEvent{
+		block: block,
+		logs:  logs,
+	})
 }
 
 func (e *EVMChain) Signer() (types.Signer, error) {

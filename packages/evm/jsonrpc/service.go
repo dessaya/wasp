@@ -318,7 +318,7 @@ func (e *EthService) NewHeads(ctx context.Context) (*rpc.Subscription, error) {
 	rpcSub := notifier.CreateSubscription()
 
 	go func() {
-		headers := make(chan *types.Header)
+		headers := make(chan *types.Header, 10)
 		unsubscribe := e.evmChain.SubscribeNewHeads(headers)
 		defer unsubscribe()
 
