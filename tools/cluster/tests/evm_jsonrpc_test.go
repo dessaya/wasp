@@ -8,6 +8,7 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,17 +31,35 @@ import (
 type clusterTestEnv struct {
 	jsonrpctest.Env
 	ChainEnv
+	DialWebsocket func() *ethclient.Client
 }
 
 func newClusterTestEnv(t *testing.T, env *ChainEnv, nodeIndex int) *clusterTestEnv {
 	evmtest.InitGoEthLogger(t)
 
+	jsonRPCEndpoint := func(path string) string {
+		return env.Clu.Config.APIHost(nodeIndex) + path
+	}
+	wsRPCEndpoint := func(path string) string {
+		return strings.Replace(env.Clu.Config.APIHost(nodeIndex), "http", "ws", 1) + path
+	}
+
 	evmJSONRPCPath := fmt.Sprintf("/v1/chains/%v/evm", env.Chain.ChainID.String())
-	jsonRPCEndpoint := env.Clu.Config.APIHost(nodeIndex) + evmJSONRPCPath
-	rawClient, err := rpc.DialHTTP(jsonRPCEndpoint)
+	rawClient, err := rpc.DialHTTP(jsonRPCEndpoint(evmJSONRPCPath))
+	t.Cleanup(rawClient.Close)
 	require.NoError(t, err)
 	client := ethclient.NewClient(rawClient)
 	t.Cleanup(client.Close)
+
+	dialWs := func() *ethclient.Client {
+		wsPath := fmt.Sprintf("/v1/chains/%v/evm/ws", env.Chain.ChainID.String())
+		wsClient, err := rpc.DialWebsocket(context.Background(), wsRPCEndpoint(wsPath), "")
+		require.NoError(t, err)
+		t.Cleanup(wsClient.Close)
+		client := ethclient.NewClient(wsClient)
+		t.Cleanup(client.Close)
+		return client
+	}
 
 	waitTxConfirmed := func(txHash common.Hash) error {
 		c := env.Chain.Client(nil, nodeIndex)
@@ -71,7 +90,8 @@ func newClusterTestEnv(t *testing.T, env *ChainEnv, nodeIndex int) *clusterTestE
 			ChainID:         evm.DefaultChainID,
 			WaitTxConfirmed: waitTxConfirmed,
 		},
-		ChainEnv: *env,
+		ChainEnv:      *env,
+		DialWebsocket: dialWs,
 	}
 	e.Env.NewAccountWithL2Funds = e.newEthereumAccountWithL2Funds
 	return e
