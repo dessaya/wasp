@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/iotaledger/hive.go/serializer/v2"
+	"github.com/iotaledger/wasp/packages/wbf"
 )
 
 // A + B
@@ -39,25 +40,13 @@ func Ratio32FromString(s string) (Ratio32, error) {
 }
 
 func (r Ratio32) Bytes() []byte {
-	var b [RatioByteSize]byte
-	copy(b[:4], Uint32To4Bytes(r.A))
-	copy(b[4:], Uint32To4Bytes(r.B))
-	return b[:]
+	return wbf.MustMarshal(&r)
 }
 
 func Ratio32FromBytes(bytes []byte) (Ratio32, error) {
-	if len(bytes) != RatioByteSize {
-		return Ratio32{}, fmt.Errorf("expected bytes length = %d", (RatioByteSize))
-	}
-	a, err := Uint32From4Bytes(bytes[:4])
-	if err != nil {
-		return Ratio32{}, err
-	}
-	b, err := Uint32From4Bytes(bytes[4:])
-	if err != nil {
-		return Ratio32{}, err
-	}
-	return Ratio32{A: a, B: b}, nil
+	var r Ratio32
+	err := wbf.Unmarshal(&r, bytes)
+	return r, err
 }
 
 func ceil(x, dividend, divisor uint64) uint64 {

@@ -20,6 +20,7 @@ import (
 	"github.com/iotaledger/wasp/packages/kv"
 	"github.com/iotaledger/wasp/packages/kv/codec"
 	"github.com/iotaledger/wasp/packages/kv/collections"
+	"github.com/iotaledger/wasp/packages/wbf"
 )
 
 const (
@@ -258,15 +259,7 @@ func makeHeader(h *types.Header) *header {
 }
 
 func encodeHeader(g *header) []byte {
-	m := marshalutil.New()
-	m.WriteBytes(g.Hash[:])
-	m.WriteUint64(g.GasLimit)
-	m.WriteUint64(g.GasUsed)
-	m.WriteUint64(g.Time)
-	m.WriteBytes(g.TxHash[:])
-	m.WriteBytes(g.ReceiptHash[:])
-	m.WriteBytes(g.Bloom[:])
-	return m.Bytes()
+	return wbf.MustMarshal(g)
 }
 
 func decodeHeader(b []byte) *header {
@@ -274,31 +267,9 @@ func decodeHeader(b []byte) *header {
 		// old format
 		return decodeHeaderGobOld(b)
 	}
-	m := marshalutil.New(b)
-	h := &header{}
-	var err error
-	if err = readBytes(m, common.HashLength, h.Hash[:]); err != nil {
-		panic(err)
-	}
-	if h.GasLimit, err = m.ReadUint64(); err != nil {
-		panic(err)
-	}
-	if h.GasUsed, err = m.ReadUint64(); err != nil {
-		panic(err)
-	}
-	if h.Time, err = m.ReadUint64(); err != nil {
-		panic(err)
-	}
-	if err = readBytes(m, common.HashLength, h.TxHash[:]); err != nil {
-		panic(err)
-	}
-	if err = readBytes(m, common.HashLength, h.ReceiptHash[:]); err != nil {
-		panic(err)
-	}
-	if err = readBytes(m, types.BloomByteLength, h.Bloom[:]); err != nil {
-		panic(err)
-	}
-	return h
+	var h header
+	wbf.MustUnmarshal(&h, b)
+	return &h
 }
 
 func readBytes(m *marshalutil.MarshalUtil, size int, dst []byte) (err error) {
