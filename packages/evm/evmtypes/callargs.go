@@ -16,8 +16,8 @@ type callMsgWbf struct {
 	From  common.Address
 	To    *common.Address `wbf:"optional"`
 	Gas   uint64
-	Value *wbf.BigInt `wbf:"optional"`
-	Data  []byte      `wbf:"u32size"`
+	Value *wbf.BigInt32 `wbf:"optional"`
+	Data  []byte        `wbf:"u32size"`
 }
 
 func EncodeCallMsg(c ethereum.CallMsg) []byte {
@@ -25,7 +25,7 @@ func EncodeCallMsg(c ethereum.CallMsg) []byte {
 		From:  c.From,
 		To:    c.To,
 		Gas:   c.Gas,
-		Value: (*wbf.BigInt)(c.Value),
+		Value: (*wbf.BigInt32)(c.Value),
 		Data:  c.Data,
 	})
 }
