@@ -27,7 +27,7 @@ func TestProofs(t *testing.T) {
 
 		key := blob.FieldValueKey(h, "file")
 		proof := ch.GetMerkleProof(blob.Contract.Hname(), key)
-		err = proof.ValidateValue(ch.GetL1Commitment().TrieRoot(), data)
+		err = proof.ValidateValue(ch.GetL1Commitment().TrieRoot, data)
 		require.NoError(t, err)
 		t.Logf("key size = %d", len(key))
 	})
@@ -46,7 +46,7 @@ func TestProofs(t *testing.T) {
 
 		recKey := blocklog.RequestReceiptKey(rec.LookupKey())
 		proof := ch.GetMerkleProof(blocklog.Contract.Hname(), recKey)
-		err = proof.ValidateValue(ch.GetL1Commitment().TrieRoot(), rec.Bytes())
+		err = proof.ValidateValue(ch.GetL1Commitment().TrieRoot, rec.Bytes())
 
 		require.NoError(t, err)
 	})
@@ -70,7 +70,7 @@ func TestProofs(t *testing.T) {
 		require.NoError(t, err)
 
 		proof := ch.GetMerkleProof(blocklog.Contract.Hname(), blocklog.BlockInfoKey(pastBlockIndex))
-		err = proof.ValidateValue(ch.GetL1Commitment().TrieRoot(), bi.Bytes())
+		err = proof.ValidateValue(ch.GetL1Commitment().TrieRoot, bi.Bytes())
 
 		require.NoError(t, err)
 	})
@@ -93,7 +93,7 @@ func TestProofs(t *testing.T) {
 		pastBlockInfo, poi, err := ch.GetBlockProof(pastBlockIndex)
 		require.NoError(t, err)
 
-		err = poi.ValidateValue(ch.GetL1Commitment().TrieRoot(), pastBlockInfo.Bytes())
+		err = poi.ValidateValue(ch.GetL1Commitment().TrieRoot, pastBlockInfo.Bytes())
 
 		require.NoError(t, err)
 	})

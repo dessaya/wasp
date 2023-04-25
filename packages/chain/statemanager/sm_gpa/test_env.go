@@ -221,7 +221,7 @@ func (teT *testEnv) ensureStoreContainsBlocksNoWait(nodeID gpa.NodeID, blocks []
 			teT.t.Logf("Checking block %s on node %s...", commitment, nodeID.ShortString())
 			store, ok := teT.stores[nodeID]
 			require.True(teT.t, ok)
-			if store.HasTrieRoot(commitment.TrieRoot()) {
+			if store.HasTrieRoot(commitment.TrieRoot) {
 				teT.t.Logf("Node %s contains block %s", nodeID.ShortString(), commitment)
 			} else {
 				teT.t.Logf("Node %s does not contain block %s", nodeID.ShortString(), commitment)

@@ -668,7 +668,7 @@ func (ch *Chain) LatestState(freshness chain.StateFreshness) (state.State, error
 	if err != nil {
 		panic(err)
 	}
-	st, err := ch.store.StateByTrieRoot(l1c.TrieRoot())
+	st, err := ch.store.StateByTrieRoot(l1c.TrieRoot)
 	if err != nil {
 		panic(err)
 	}

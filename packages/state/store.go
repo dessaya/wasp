@@ -68,7 +68,7 @@ func (s *store) NewOriginStateDraft() StateDraft {
 }
 
 func (s *store) NewStateDraft(timestamp time.Time, prevL1Commitment *L1Commitment) (StateDraft, error) {
-	prevState, err := s.stateByTrieRoot(prevL1Commitment.TrieRoot())
+	prevState, err := s.stateByTrieRoot(prevL1Commitment.TrieRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +79,7 @@ func (s *store) NewEmptyStateDraft(prevL1Commitment *L1Commitment) (StateDraft, 
 	if prevL1Commitment == nil {
 		return nil, errors.New("nil prevL1Commitment")
 	}
-	prevState, err := s.stateByTrieRoot(prevL1Commitment.TrieRoot())
+	prevState, err := s.stateByTrieRoot(prevL1Commitment.TrieRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -93,10 +93,10 @@ func (s *store) extractBlock(d StateDraft) (Block, *buffered.Mutations) {
 	{
 		baseL1Commitment := d.BaseL1Commitment()
 		if baseL1Commitment != nil {
-			if !s.db.hasBlock(baseL1Commitment.TrieRoot()) {
+			if !s.db.hasBlock(baseL1Commitment.TrieRoot) {
 				panic("cannot commit state: base trie root not found")
 			}
-			baseTrieRoot = baseL1Commitment.TrieRoot()
+			baseTrieRoot = baseL1Commitment.TrieRoot
 		} else {
 			baseTrieRoot = bufDB.initTrie()
 		}

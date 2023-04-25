@@ -71,7 +71,7 @@ func (s *istore) findTrieRootByIndex(index uint32) (trie.Hash, error) {
 	if err != nil {
 		return trie.Hash{}, err
 	}
-	return nextBlockInfo.PreviousL1Commitment().TrieRoot(), nil
+	return nextBlockInfo.PreviousL1Commitment().TrieRoot, nil
 }
 
 type fakeistore struct {
@@ -104,7 +104,7 @@ func (s *fakeistore) BlockByIndex(index uint32) (state.Block, error) {
 	}
 	block := latestBlock
 	for block.StateIndex() > index {
-		block, err = s.BlockByTrieRoot(block.PreviousL1Commitment().TrieRoot())
+		block, err = s.BlockByTrieRoot(block.PreviousL1Commitment().TrieRoot)
 		if err != nil {
 			return nil, err
 		}

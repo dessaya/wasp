@@ -86,8 +86,8 @@ func (bcT *blockCache) GetBlock(commitment *state.L1Commitment) state.Block {
 	}
 
 	// Check in WAL
-	if bcT.wal.Contains(commitment.BlockHash()) {
-		block, err := bcT.wal.Read(commitment.BlockHash())
+	if bcT.wal.Contains(commitment.BlockHash) {
+		block, err := bcT.wal.Read(commitment.BlockHash)
 		if err != nil {
 			bcT.log.Errorf("Error reading block %s from WAL: %w", commitment, err)
 			return nil

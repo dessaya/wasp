@@ -34,7 +34,7 @@ func (m mustChainStore) BlockByIndex(i uint32) state.Block {
 	}
 	block := latest
 	for block.StateIndex() > i {
-		block, err = m.Store.BlockByTrieRoot(block.PreviousL1Commitment().TrieRoot())
+		block, err = m.Store.BlockByTrieRoot(block.PreviousL1Commitment().TrieRoot)
 		if err != nil {
 			panic(err)
 		}

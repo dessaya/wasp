@@ -158,24 +158,23 @@ func writeStruct(v reflect.Value, w io.Writer) error {
 	for i := 0; i < n; i++ {
 		fv := v.Field(i)
 		tag := t.Field(i).Tag.Get("wbf")
+		var err error
 		switch tag {
+		case "u8size":
+			err = writeSliceWithSize(fv, w, writeUint8)
+		case "u16size":
+			err = writeSliceWithSize(fv, w, writeUint16)
 		case "u32size":
-			err := writeSlice32(fv, w)
-			if err != nil {
-				return err
-			}
+			err = writeSliceWithSize(fv, w, writeUint32)
 		case "optional":
-			err := writeOptional(fv, w)
-			if err != nil {
-				return err
-			}
+			err = writeOptional(fv, w)
 		case "":
-			err := writeValue(fv, w)
-			if err != nil {
-				return err
-			}
+			err = writeValue(fv, w)
 		default:
-			return fmt.Errorf("no handler for wbf tag %q", tag)
+			err = fmt.Errorf("no handler for wbf tag %q", tag)
+		}
+		if err != nil {
+			return fmt.Errorf("cannot write field %s: %w", t.Field(i).Name, err)
 		}
 	}
 	return nil
@@ -196,17 +195,21 @@ func writeOptional(v reflect.Value, w io.Writer) error {
 	return nil
 }
 
-func writeSlice32(v reflect.Value, w io.Writer) error {
+func writeSliceWithSize[T interface{ uint8 | uint16 | uint32 }](
+	v reflect.Value,
+	w io.Writer,
+	writeUint func(T, io.Writer) error,
+) error {
 	switch v.Kind() {
 	case reflect.Array, reflect.Slice:
-		size := uint32(v.Len())
-		err := writeUint32(size, w)
+		size := T(v.Len())
+		err := writeUint(size, w)
 		if err != nil {
 			return err
 		}
 		return writeValue(v, w)
 	default:
-		return errors.New("u32size cannot be applied to non-slice value")
+		return errors.New("u8size/u16size/u32size cannot be applied to non-slice value")
 	}
 }
 
@@ -322,7 +325,7 @@ func readValue(v reflect.Value, r io.Reader) error {
 	case reflect.Slice:
 		return readSlice(v, r)
 	case reflect.Pointer:
-		v.Set(reflect.New(v.Elem().Type()))
+		v.Set(reflect.New(v.Type().Elem()))
 		return readValue(v.Elem(), r)
 	default:
 		return fmt.Errorf("cannot decode a value of type %s", kind)
@@ -419,8 +422,12 @@ func readStruct(v reflect.Value, r io.Reader) error {
 		tag := t.Field(i).Tag.Get("wbf")
 		var err error
 		switch tag {
+		case "u8size":
+			err = readSliceWithSize(fv, r, readUint8)
+		case "u16size":
+			err = readSliceWithSize(fv, r, readUint16)
 		case "u32size":
-			err = readSlice32(fv, r)
+			err = readSliceWithSize(fv, r, readUint32)
 		case "optional":
 			err = readOptional(fv, r)
 		case "":
@@ -429,7 +436,7 @@ func readStruct(v reflect.Value, r io.Reader) error {
 			err = fmt.Errorf("no handler for wbf tag %q", tag)
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("cannot read field %s: %w", t.Field(i).Name, err)
 		}
 	}
 	return nil
@@ -454,8 +461,12 @@ func readOptional(v reflect.Value, r io.Reader) error {
 	return readValue(v, r)
 }
 
-func readSlice32(v reflect.Value, r io.Reader) error {
-	n, err := readUint32(r)
+func readSliceWithSize[T interface{ uint8 | uint16 | uint32 }](
+	v reflect.Value,
+	r io.Reader,
+	readUint func(io.Reader) (T, error),
+) error {
+	n, err := readUint(r)
 	if err != nil {
 		return err
 	}

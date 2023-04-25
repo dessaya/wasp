@@ -279,7 +279,7 @@ func (tsm *testStateMgr) addOriginState(originAO *isc.AliasOutputWithID) {
 		origin.ParamChainOwner: isc.NewAgentID(originAO.GetAliasOutput().GovernorAddress()).Bytes(),
 	}
 	chainState, err := tsm.chainStore.StateByTrieRoot(
-		origin.L1Commitment(initParams, accounts.MinimumBaseTokensOnCommonAccount).TrieRoot(),
+		origin.L1Commitment(initParams, accounts.MinimumBaseTokensOnCommonAccount).TrieRoot,
 	)
 	require.NoError(tsm.t, err)
 	tsm.addState(originAO, chainState)

@@ -592,10 +592,10 @@ func (cni *chainNodeImpl) handleStateTrackerActCB(st state.State, from, till *is
 	// Set the state to match the ActiveOrConfirmed state.
 	if latestConfirmedAO == nil || till.GetStateIndex() > latestConfirmedAO.GetStateIndex() {
 		l1Commitment := transaction.MustL1CommitmentFromAliasOutput(till.GetAliasOutput())
-		if err := cni.chainStore.SetLatest(l1Commitment.TrieRoot()); err != nil {
+		if err := cni.chainStore.SetLatest(l1Commitment.TrieRoot); err != nil {
 			panic(fmt.Errorf("cannot set L1Commitment=%v as latest: %w", l1Commitment, err))
 		}
-		cni.log.Debugf("Latest state set to ACT index=%v, trieRoot=%v", till.GetStateIndex(), l1Commitment.TrieRoot())
+		cni.log.Debugf("Latest state set to ACT index=%v, trieRoot=%v", till.GetStateIndex(), l1Commitment.TrieRoot)
 	}
 
 	newAccessNodes := governance.NewStateAccess(st).GetAccessNodes()
@@ -631,10 +631,10 @@ func (cni *chainNodeImpl) handleStateTrackerCnfCB(st state.State, from, till *is
 	// Set the state to match the ActiveOrConfirmed state.
 	if latestActiveStateAO == nil || latestActiveStateAO.GetStateIndex() <= till.GetStateIndex() {
 		l1Commitment := transaction.MustL1CommitmentFromAliasOutput(till.GetAliasOutput())
-		if err := cni.chainStore.SetLatest(l1Commitment.TrieRoot()); err != nil {
+		if err := cni.chainStore.SetLatest(l1Commitment.TrieRoot); err != nil {
 			panic(fmt.Errorf("cannot set L1Commitment=%v as latest: %w", l1Commitment, err))
 		}
-		cni.log.Debugf("Latest state set to CNF index=%v, trieRoot=%v", till.GetStateIndex(), l1Commitment.TrieRoot())
+		cni.log.Debugf("Latest state set to CNF index=%v, trieRoot=%v", till.GetStateIndex(), l1Commitment.TrieRoot)
 	}
 }
 

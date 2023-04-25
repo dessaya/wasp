@@ -8,7 +8,7 @@ import (
 type BlockKey state.BlockHash
 
 func NewBlockKey(commitment *state.L1Commitment) BlockKey {
-	return BlockKey(commitment.BlockHash())
+	return BlockKey(commitment.BlockHash)
 }
 
 func (bkT BlockKey) Equals(other BlockKey) bool {

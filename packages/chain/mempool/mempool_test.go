@@ -476,7 +476,7 @@ func newEnv(t *testing.T, n, f int, reliable bool) *testEnv {
 func (te *testEnv) stateForAO(i int, ao *isc.AliasOutputWithID) state.State {
 	l1Commitment, err := transaction.L1CommitmentFromAliasOutput(ao.GetAliasOutput())
 	require.NoError(te.t, err)
-	st, err := te.stores[i].StateByTrieRoot(l1Commitment.TrieRoot())
+	st, err := te.stores[i].StateByTrieRoot(l1Commitment.TrieRoot)
 	require.NoError(te.t, err)
 	return st
 }

@@ -51,7 +51,7 @@ func NewBlockFactory(t require.TestingT) *BlockFactory {
 	aliasOutputs := make(map[state.BlockHash]*isc.AliasOutputWithID)
 	originCommitment := origin.L1Commitment(nil, 0)
 	originOutput := isc.NewAliasOutputWithID(aliasOutput0, aliasOutput0ID)
-	aliasOutputs[originCommitment.BlockHash()] = originOutput
+	aliasOutputs[originCommitment.BlockHash] = originOutput
 	chainStore := state.NewStore(mapdb.NewMapDB())
 	origin.InitChain(chainStore, nil, 0)
 	return &BlockFactory{
@@ -95,7 +95,7 @@ func (bfT *BlockFactory) GetBlocksFrom(
 	}
 	result := make([]state.Block, count+1)
 	var err error
-	result[0], err = bfT.store.BlockByTrieRoot(commitment.TrieRoot())
+	result[0], err = bfT.store.BlockByTrieRoot(commitment.TrieRoot)
 	require.NoError(bfT.t, err)
 	for i := 1; i < len(result); i++ {
 		baseIndex := (i + branchingFactor - 2) / branchingFactor
@@ -141,7 +141,7 @@ func (bfT *BlockFactory) GetNextBlock(
 	}
 	aliasOutputID := iotago.OutputIDFromTransactionIDAndIndex(getRandomTxID(bfT.t), 0)
 	aliasOutputWithID := isc.NewAliasOutputWithID(aliasOutput, aliasOutputID)
-	bfT.aliasOutputs[newCommitment.BlockHash()] = aliasOutputWithID
+	bfT.aliasOutputs[newCommitment.BlockHash] = aliasOutputWithID
 
 	return block
 }
@@ -154,13 +154,13 @@ func (bfT *BlockFactory) GetStateDraft(block state.Block) state.StateDraft {
 }
 
 func (bfT *BlockFactory) GetState(commitment *state.L1Commitment) state.State {
-	result, err := bfT.store.StateByTrieRoot(commitment.TrieRoot())
+	result, err := bfT.store.StateByTrieRoot(commitment.TrieRoot)
 	require.NoError(bfT.t, err)
 	return result
 }
 
 func (bfT *BlockFactory) GetAliasOutput(commitment *state.L1Commitment) *isc.AliasOutputWithID {
-	result, ok := bfT.aliasOutputs[commitment.BlockHash()]
+	result, ok := bfT.aliasOutputs[commitment.BlockHash]
 	require.True(bfT.t, ok)
 	return result
 }

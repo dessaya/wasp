@@ -53,10 +53,10 @@ func (bwtsmT *blockWALTestSM) Check(t *rapid.T) {
 func (bwtsmT *blockWALTestSM) WriteBlock(t *rapid.T) {
 	block := bwtsmT.factory.GetNextBlock(bwtsmT.lastBlockCommitment)
 	bwtsmT.lastBlockCommitment = block.L1Commitment()
-	bwtsmT.blocks[bwtsmT.lastBlockCommitment.BlockHash()] = block
+	bwtsmT.blocks[bwtsmT.lastBlockCommitment.BlockHash] = block
 	err := bwtsmT.bw.Write(block)
 	require.NoError(t, err)
-	t.Logf("Block %s written", bwtsmT.lastBlockCommitment.BlockHash())
+	t.Logf("Block %s written", bwtsmT.lastBlockCommitment.BlockHash)
 }
 
 // Correct the damaged block file

@@ -213,8 +213,8 @@ func TestBlockCacheFull(t *testing.T) {
 	require.NotNil(t, blockCache.GetBlock(blocks[3].L1Commitment()))
 	require.Nil(t, blockCache.GetBlock(blocks[4].L1Commitment()))
 	blockCache.CleanOlderThan(now.Add(1 * time.Second)) // Removing blocks 0 and 1
-	wal.Delete(blocks[0].L1Commitment().BlockHash())
-	wal.Delete(blocks[2].L1Commitment().BlockHash())
+	wal.Delete(blocks[0].L1Commitment().BlockHash)
+	wal.Delete(blocks[2].L1Commitment().BlockHash)
 	require.False(t, wal.Contains(blocks[0].Hash()))
 	require.True(t, wal.Contains(blocks[1].Hash()))
 	require.False(t, wal.Contains(blocks[2].Hash()))

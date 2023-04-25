@@ -15,6 +15,7 @@ import (
 	"github.com/iotaledger/wasp/packages/kv/buffered"
 	"github.com/iotaledger/wasp/packages/kv/codec"
 	"github.com/iotaledger/wasp/packages/trie"
+	"github.com/iotaledger/wasp/packages/wbf"
 )
 
 type block struct {
@@ -47,7 +48,7 @@ func BlockFromBytes(blockBytes []byte) (*block, error) {
 	var prevL1Commitment *L1Commitment
 	if hasPrevL1Commitment {
 		prevL1Commitment = new(L1Commitment)
-		err = prevL1Commitment.Read(buf)
+		err = wbf.ReadValue(prevL1Commitment, buf)
 		if err != nil {
 			return nil, err
 		}

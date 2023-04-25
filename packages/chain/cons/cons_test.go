@@ -210,7 +210,7 @@ func testConsBasic(t *testing.T, n, f int) {
 		require.NotNil(t, out.NeedStateMgrDecidedState)
 		l1Commitment, err := transaction.L1CommitmentFromAliasOutput(out.NeedStateMgrDecidedState.GetAliasOutput())
 		require.NoError(t, err)
-		chainState, err := chainStates[nid].StateByTrieRoot(l1Commitment.TrieRoot())
+		chainState, err := chainStates[nid].StateByTrieRoot(l1Commitment.TrieRoot)
 		require.NoError(t, err)
 		tc.WithInput(nid, cons.NewInputMempoolRequests(reqs))
 		tc.WithInput(nid, cons.NewInputStateMgrDecidedVirtualState(chainState))
@@ -399,7 +399,7 @@ func testChained(t *testing.T, n, f, b int) {
 		t.Log("Going to provide inputs.")
 		originL1Commitment, err := transaction.L1CommitmentFromAliasOutput(originAO.GetAliasOutput())
 		require.NoError(t, err)
-		originState, err := testNodeStates[nid].StateByTrieRoot(originL1Commitment.TrieRoot())
+		originState, err := testNodeStates[nid].StateByTrieRoot(originL1Commitment.TrieRoot)
 		require.NoError(t, err)
 		testChainInsts[0].input(&testInstInput{
 			nodeID:          nid,

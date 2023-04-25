@@ -212,7 +212,7 @@ func (smT *stateManagerGPA) handleConsensusDecidedState(cds *sm_inputs.Consensus
 			return cds.IsValid()
 		},
 		func() {
-			state, err := smT.store.StateByTrieRoot(cds.GetL1Commitment().TrieRoot())
+			state, err := smT.store.StateByTrieRoot(cds.GetL1Commitment().TrieRoot)
 			if err != nil {
 				smT.log.Errorf("Input consensus decided state %s: error obtaining state: %w", cds.GetL1Commitment(), err)
 				return
@@ -232,7 +232,7 @@ func (smT *stateManagerGPA) handleConsensusBlockProduced(input *sm_inputs.Consen
 	stateIndex := input.GetStateDraft().BlockIndex()
 	commitment := input.GetStateDraft().BaseL1Commitment()
 	smT.log.Debugf("Input block produced on state index %v %s received...", stateIndex, commitment)
-	if !smT.store.HasTrieRoot(commitment.TrieRoot()) {
+	if !smT.store.HasTrieRoot(commitment.TrieRoot) {
 		smT.log.Panicf("Input block produced on state index %v %s: state, on which this block is produced, is not yet in the store", stateIndex, commitment)
 	}
 	// NOTE: committing already committed block is allowed (see `TestDoubleCommit` test in `packages/state/state_test.go`)
@@ -292,7 +292,7 @@ func (smT *stateManagerGPA) handleChainFetchStateDiff(input *sm_inputs.ChainFetc
 		commonCommitment := lastBlockFun(oldChainOfBlocks).L1Commitment()
 		oldChainOfBlocks = lo.Reverse(oldChainOfBlocks[:len(oldChainOfBlocks)-1])
 		newChainOfBlocks = lo.Reverse(newChainOfBlocks[:len(newChainOfBlocks)-1])
-		newState, err := smT.store.StateByTrieRoot(input.GetNewL1Commitment().TrieRoot())
+		newState, err := smT.store.StateByTrieRoot(input.GetNewL1Commitment().TrieRoot)
 		if err != nil {
 			smT.log.Errorf("Input mempool state request for state index %v %s: error obtaining state: %w",
 				input.GetNewStateIndex(), input.GetNewL1Commitment(), err)
@@ -337,21 +337,21 @@ func (smT *stateManagerGPA) getBlock(commitment *state.L1Commitment) state.Block
 	}
 
 	// Check in store (DB).
-	if !smT.store.HasTrieRoot(commitment.TrieRoot()) {
+	if !smT.store.HasTrieRoot(commitment.TrieRoot) {
 		return nil
 	}
 	var err error
-	block, err = smT.store.BlockByTrieRoot(commitment.TrieRoot())
+	block, err = smT.store.BlockByTrieRoot(commitment.TrieRoot)
 	if err != nil {
 		smT.log.Errorf("Loading block %s from the DB failed: %v", commitment, err)
 		return nil
 	}
-	if !commitment.BlockHash().Equals(block.Hash()) {
+	if !commitment.BlockHash.Equals(block.Hash()) {
 		smT.log.Errorf("Block %s loaded from the database has hash %s",
 			commitment, block.Hash())
 		return nil
 	}
-	if !commitment.TrieRoot().Equals(block.TrieRoot()) {
+	if !commitment.TrieRoot.Equals(block.TrieRoot()) {
 		smT.log.Errorf("Block %s loaded from the database has trie root %s",
 			commitment, block.TrieRoot())
 		return nil
@@ -362,7 +362,7 @@ func (smT *stateManagerGPA) getBlock(commitment *state.L1Commitment) state.Block
 }
 
 func (smT *stateManagerGPA) traceBlockChainWithCallback(lastCommitment *state.L1Commitment, callback blockRequestCallback) gpa.OutMessages {
-	if smT.store.HasTrieRoot(lastCommitment.TrieRoot()) {
+	if smT.store.HasTrieRoot(lastCommitment.TrieRoot) {
 		smT.log.Debugf("Tracing block %s chain: the block is already in the store, calling back", lastCommitment)
 		callback.requestCompleted()
 		return nil // No messages to send
@@ -388,7 +388,7 @@ func (smT *stateManagerGPA) traceBlockChainWithCallback(lastCommitment *state.L1
 // has all the blocks before it.
 func (smT *stateManagerGPA) traceBlockChain(fetcher blockFetcher) gpa.OutMessages {
 	commitment := fetcher.getCommitment()
-	if !smT.store.HasTrieRoot(commitment.TrieRoot()) {
+	if !smT.store.HasTrieRoot(commitment.TrieRoot) {
 		block := smT.blockCache.GetBlock(commitment)
 		if block == nil {
 			smT.blocksToFetch.addFetcher(fetcher)

@@ -3,10 +3,10 @@ package transaction
 import (
 	"fmt"
 
-	"github.com/iotaledger/hive.go/serializer/v2/marshalutil"
 	iotago "github.com/iotaledger/iota.go/v3"
 	"github.com/iotaledger/wasp/packages/state"
 	"github.com/iotaledger/wasp/packages/vm/gas"
+	"github.com/iotaledger/wasp/packages/wbf"
 )
 
 const (
@@ -19,10 +19,10 @@ const (
 
 type StateMetadata struct {
 	Version        byte
+	SchemaVersion  uint32
 	L1Commitment   *state.L1Commitment
 	GasFeePolicy   *gas.FeePolicy
-	SchemaVersion  uint32
-	CustomMetadata []byte
+	CustomMetadata []byte `wbf:"u16size"`
 }
 
 func NewStateMetadata(
@@ -41,61 +41,22 @@ func NewStateMetadata(
 }
 
 func (s *StateMetadata) Bytes() []byte {
-	mu := marshalutil.New()
-	mu.WriteByte(StateMetadataSupportedVersion) // Always write the new version.
-	mu.WriteUint32(s.SchemaVersion)
-	mu.WriteBytes(s.L1Commitment.Bytes())
-	mu.WriteBytes(s.GasFeePolicy.Bytes())
-	mu.WriteUint16(uint16(len(s.CustomMetadata)))
-	mu.WriteBytes(s.CustomMetadata)
-	return mu.Bytes()
+	if s.Version != StateMetadataSupportedVersion {
+		panic(fmt.Sprintf("cannot serialize state metadata: unsupported version %d", s.Version))
+	}
+	return wbf.MustMarshal(s)
 }
 
 func StateMetadataFromBytes(data []byte) (*StateMetadata, error) {
-	ret := &StateMetadata{}
-	mu := marshalutil.New(data)
-	var err error
-
-	ret.Version, err = mu.ReadByte()
-	if err != nil {
-		return nil, fmt.Errorf("unable to parse state metadata version, error: %w", err)
+	if len(data) == 0 {
+		return nil, fmt.Errorf("unable to parse state metadata version: EOF")
 	}
-	if ret.Version > StateMetadataSupportedVersion {
-		return nil, fmt.Errorf("unsupported state metadata version: %d", ret.Version)
+	if data[0] > StateMetadataSupportedVersion {
+		return nil, fmt.Errorf("unsupported state metadata version: %d", data[0])
 	}
-
-	ret.SchemaVersion, err = mu.ReadUint32()
-	if err != nil {
-		return nil, fmt.Errorf("unable to parse schema version, error: %w", err)
-	}
-
-	l1CommitmentBytes, err := mu.ReadBytes(state.L1CommitmentSize)
-	if err != nil {
-		return nil, fmt.Errorf("unable to parse l1 commitment, error: %w", err)
-	}
-
-	ret.L1Commitment, err = state.L1CommitmentFromBytes(l1CommitmentBytes)
-	if err != nil {
-		return nil, fmt.Errorf("unable to parse l1 commitment, error: %w", err)
-	}
-
-	ret.GasFeePolicy, err = gas.FeePolicyFromMarshalUtil(mu)
-	if err != nil {
-		return nil, fmt.Errorf("unable to parse gas fee policy, error: %w", err)
-	}
-
-	customMetadataLength, err := mu.ReadUint16()
-	if err != nil {
-		return nil, fmt.Errorf("unable to parse custom metadata length, error: %w", err)
-	}
-
-	customMetadataBytes, err := mu.ReadBytes(int(customMetadataLength))
-	if err != nil {
-		return nil, fmt.Errorf("unable to parse custom metadata, error: %w", err)
-	}
-	ret.CustomMetadata = customMetadataBytes
-
-	return ret, nil
+	ret := StateMetadata{}
+	err := wbf.Unmarshal(&ret, data)
+	return &ret, err
 }
 
 func L1CommitmentFromAliasOutput(ao *iotago.AliasOutput) (*state.L1Commitment, error) {

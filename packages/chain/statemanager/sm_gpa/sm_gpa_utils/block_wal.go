@@ -45,7 +45,7 @@ func NewBlockWAL(log *logger.Logger, baseDir string, chainID isc.ChainID, metric
 func (bwT *blockWAL) Write(block state.Block) error {
 	blockIndex := block.StateIndex()
 	commitment := block.L1Commitment()
-	fileName := fileName(commitment.BlockHash())
+	fileName := fileName(commitment.BlockHash)
 	filePath := filepath.Join(bwT.dir, fileName)
 	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o666)
 	if err != nil {
