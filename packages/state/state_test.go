@@ -5,6 +5,7 @@ package state_test
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/iotaledger/hive.go/kvstore"
 	"github.com/iotaledger/hive.go/kvstore/mapdb"
+	"github.com/iotaledger/wasp/packages/isc"
 	"github.com/iotaledger/wasp/packages/isc/coreutil"
 	"github.com/iotaledger/wasp/packages/kv"
 	"github.com/iotaledger/wasp/packages/origin"
@@ -99,8 +101,8 @@ func (m mustChainStore) NewStateDraft(timestamp time.Time, prevL1Commitment *sta
 	return r
 }
 
-func initializedStore(db kvstore.KVStore) state.Store {
-	st := state.NewStore(db)
+func initializedStore(db kvstore.KVStore, keepLatest ...int) state.Store {
+	st := state.NewStore(db, keepLatest...)
 	origin.InitChain(st, nil, 0)
 	return st
 }
@@ -312,4 +314,65 @@ func TestSnapshot(t *testing.T) {
 		require.EqualValues(t, []byte("v"), state.Get(kv.Key(fmt.Sprintf("k%d", i))))
 	}
 	require.EqualValues(t, []byte{10}, state.Get("k"))
+}
+
+func TestPruning(t *testing.T) {
+	rnd := rand.New(rand.NewSource(0))
+
+	const alphabet = "ab"
+	hname := isc.Hn("*")
+	randomKey := func() kv.Key {
+		n := rnd.Intn(10) + 1
+		b := make([]byte, n)
+		for i := 0; i < n; i++ {
+			b[i] = alphabet[rnd.Intn(len(alphabet))]
+		}
+		return kv.Key(hname.Bytes()) + kv.Key(b)
+	}
+
+	randomValue := func() []byte {
+		// half of the values will be stored in the trie nodes,
+		// and the other half in the value store
+		n := rnd.Intn(128) + 1
+		b := make([]byte, n)
+		_, err := rnd.Read(b)
+		require.NoError(t, err)
+		return b
+	}
+
+	var sizes []int
+
+	const keepLatest = 10
+	db := mapdb.NewMapDB()
+	cs := mustChainStore{initializedStore(db, keepLatest)}
+
+	for i := 1; i <= 200; i++ {
+		d := cs.NewStateDraft(time.Unix(int64(i), 0), cs.LatestBlock().L1Commitment())
+		for j := 0; j < 100; j++ {
+			d.Set(randomKey(), randomValue())
+		}
+		for j := 0; j < 10; j++ {
+			d.Del(randomKey())
+		}
+		block := cs.Commit(d)
+		err := cs.SetLatest(block.TrieRoot())
+		require.NoError(t, err)
+
+		size := 0
+		err = db.Iterate(kvstore.EmptyPrefix, func(k []byte, v []byte) bool {
+			size += len(k) + len(v)
+			return true
+		})
+		sizes = append(sizes, size)
+		require.NoError(t, err)
+
+		// check that the latest trie can access all its nodes
+		cs.LatestState().Iterate("", func(k kv.Key, v []byte) bool {
+			return true
+		})
+	}
+
+	t.Log(sizes)
+	t.Logf("%+v", trie.PruneStats)
+	require.Less(t, sizes[len(sizes)-1], 3_000_000)
 }

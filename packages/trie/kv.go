@@ -20,6 +20,7 @@ type KVWriter interface {
 	// Set writes new or updates existing key with the value.
 	// value == nil means deletion of the key from the store
 	Set(key, value []byte)
+	Del(key []byte)
 }
 
 // KVIterator is an interface to iterate through a set of key/value pairs.
@@ -76,6 +77,10 @@ type writerPartition struct {
 
 func (w *writerPartition) Set(key, value []byte) {
 	w.w.Set(concat([]byte{w.prefix}, key), value)
+}
+
+func (w *writerPartition) Del(key []byte) {
+	w.w.Del(concat([]byte{w.prefix}, key))
 }
 
 func makeWriterPartition(w KVWriter, prefix byte) KVWriter {

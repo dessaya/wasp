@@ -125,3 +125,15 @@ func (t *Tcommitment) ExtractValue() ([]byte, bool) {
 	}
 	return nil, false
 }
+
+func (t *Tcommitment) ValueHash() (Hash, bool) {
+	if t.IsValue {
+		return Hash{}, false
+	}
+	var hash Hash
+	if len(t.Data) != len(hash) {
+		panic("inconsistency")
+	}
+	copy(hash[:], t.Data)
+	return hash, true
+}
