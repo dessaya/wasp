@@ -14,9 +14,10 @@ import (
 type trieDiffStats struct {
 	start     time.Time
 	lastShown time.Time
+	visited1  int
+	visited2  int
 	onlyOn1   int
 	onlyOn2   int
-	inCommon  int
 }
 
 func trieDiff(ctx context.Context, kvs kvstore.KVStore) {
@@ -41,53 +42,81 @@ func trieDiff(ctx context.Context, kvs kvstore.KVStore) {
 		key []byte
 	}
 
-	iterateTrie := func(tr *trie.TrieReader, ch chan *nodeData) {
-		defer close(ch)
-		tr.IterateNodes(func(nodeKey []byte, node *trie.NodeData, depth int) bool {
-			if ctx.Err() != nil {
-				return false
+	iterateTrie := func(tr *trie.TrieReader) func(trie.IterateNodesAction) *nodeData {
+		nodes := make(chan *nodeData, 1)
+		actions := make(chan trie.IterateNodesAction, 1)
+
+		go func() {
+			defer close(nodes)
+			tr.IterateNodes(func(nodeKey []byte, node *trie.NodeData, depth int) trie.IterateNodesAction {
+				if ctx.Err() != nil {
+					fmt.Println("err -> stop")
+					return trie.IterateStop
+				}
+				nodes <- &nodeData{NodeData: node, key: nodeKey}
+				if ctx.Err() != nil {
+					fmt.Println("err -> stop 2")
+					return trie.IterateStop
+				}
+				action := <-actions
+				return action
+			})
+		}()
+
+		first := true
+		return func(a trie.IterateNodesAction) *nodeData {
+			if !first {
+				actions <- a
 			}
-			ch <- &nodeData{NodeData: node, key: nodeKey}
-			return true
-		})
+			first = false
+			node, ok := <-nodes
+			if !ok {
+				actions <- trie.IterateStop
+				return nil
+			}
+			return node
+		}
 	}
-	ch1 := make(chan *nodeData, 100)
-	ch2 := make(chan *nodeData, 100)
-	go iterateTrie(tr1, ch1)
-	go iterateTrie(tr2, ch2)
+	next1 := iterateTrie(tr1)
+	next2 := iterateTrie(tr2)
 
 	// This is similar to the 'merge' function in mergeSort.
 	// We iterate both tries in order, advancing the iterator of the smallest
 	// node between the two.
 
 	var current1 *nodeData
-	var ok1 bool
 	var current2 *nodeData
-	var ok2 bool
-	current1, ok1 = <-ch1
-	current2, ok2 = <-ch2
-	for ok1 && ok2 {
+	current1 = next1(trie.IterateContinue)
+	diff.visited1++
+	current2 = next2(trie.IterateContinue)
+	diff.visited2++
+	for current1 != nil && current2 != nil {
 		if current1.Commitment == current2.Commitment {
-			diff.inCommon++
-			current1, ok1 = <-ch1
-			current2, ok2 = <-ch2
+			current1 = next1(trie.IterateSkipSubtree)
+			diff.visited1++
+			current2 = next2(trie.IterateSkipSubtree)
+			diff.visited2++
 		} else if bytes.Compare(current1.key, current2.key) < 0 {
 			diff.onlyOn1++
-			current1, ok1 = <-ch1
+			current1 = next1(trie.IterateContinue)
+			diff.visited1++
 		} else {
 			diff.onlyOn2++
-			current2, ok2 = <-ch2
+			current2 = next2(trie.IterateContinue)
+			diff.visited2++
 		}
 		showDiff(false, &diff)
 	}
-	for ok1 {
+	for current1 != nil {
 		diff.onlyOn1++
-		_, ok1 = <-ch1
+		current1 = next1(trie.IterateContinue)
+		diff.visited1++
 		showDiff(false, &diff)
 	}
-	for ok2 {
+	for current2 != nil {
 		diff.onlyOn2++
-		_, ok2 = <-ch2
+		current2 = next2(trie.IterateContinue)
+		diff.visited2++
 		showDiff(false, &diff)
 	}
 
@@ -102,33 +131,17 @@ func showDiff(force bool, diff *trieDiffStats) {
 	}
 	diff.lastShown = now
 
-	n1 := diff.onlyOn1 + diff.inCommon
-	n2 := diff.onlyOn2 + diff.inCommon
-
 	clearScreen()
 	fmt.Println()
 	fmt.Printf("Diff between blocks #%d -> #%d\n", blockIndex, blockIndex2)
 	fmt.Println()
-	fmt.Printf("amount of nodes: %d -> %d (%+d)\n", n1, n2, n2-n1)
-	fmt.Printf("in common: %d (%.2f%% of #%d) (%.2f%% of #%d)\n",
-		diff.inCommon,
-		percentf(diff.inCommon, n1),
-		blockIndex,
-		percentf(diff.inCommon, n2),
-		blockIndex2,
-	)
-	fmt.Printf("only on #%d: %d (%.2f%%)\n",
-		blockIndex,
-		diff.onlyOn1,
-		percentf(diff.onlyOn1, n1),
-	)
-	fmt.Printf("only on #%d: %d (%.2f%%)\n",
-		blockIndex2,
-		diff.onlyOn2,
-		percentf(diff.onlyOn2, n2),
-	)
+	fmt.Printf("visited %d nodes on #%d\n", diff.visited1, blockIndex)
+	fmt.Printf("visited %d nodes on #%d\n", diff.visited2, blockIndex2)
+	fmt.Println()
+	fmt.Printf("only on #%d: %d\n", blockIndex, diff.onlyOn1)
+	fmt.Printf("only on #%d: %d\n", blockIndex2, diff.onlyOn2)
 	fmt.Println()
 	elapsed := time.Since(diff.start)
 	fmt.Printf("Elapsed: %s\n", elapsed)
-	fmt.Printf("Speed: %d nodes/s\n", int(float64(n1+n2)/(elapsed.Seconds())))
+	fmt.Printf("Speed: %d nodes/s\n", int(float64(diff.visited1+diff.visited2)/(elapsed.Seconds())))
 }

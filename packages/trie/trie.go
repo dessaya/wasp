@@ -94,16 +94,16 @@ func (tr *TrieUpdatable) newTerminalNode(triePath, pathExtension, value []byte) 
 
 // DebugDump prints the structure of the tree to stdout, for debugging purposes.
 func (tr *TrieReader) DebugDump() {
-	tr.IterateNodes(func(nodeKey []byte, n *NodeData, depth int) bool {
+	tr.IterateNodes(func(nodeKey []byte, n *NodeData, depth int) IterateNodesAction {
 		fmt.Printf("%s %v %s\n", strings.Repeat(" ", len(nodeKey)), nodeKey, n)
-		return true
+		return IterateContinue
 	})
 }
 
 func (tr *TrieReader) CopyToStore(snapshot KVStore) {
 	triePartition := makeWriterPartition(snapshot, partitionTrieNodes)
 	valuePartition := makeWriterPartition(snapshot, partitionValues)
-	tr.IterateNodes(func(_ []byte, n *NodeData, depth int) bool {
+	tr.IterateNodes(func(_ []byte, n *NodeData, depth int) IterateNodesAction {
 		nodeKey := n.Commitment.Bytes()
 		triePartition.Set(nodeKey, tr.nodeStore.trieStore.Get(nodeKey))
 		if n.Terminal != nil && !n.Terminal.IsValue {
@@ -111,6 +111,6 @@ func (tr *TrieReader) CopyToStore(snapshot KVStore) {
 			valueKey := n.Terminal.Bytes()
 			valuePartition.Set(valueKey, tr.nodeStore.valueStore.Get(valueKey))
 		}
-		return true
+		return IterateContinue
 	})
 }

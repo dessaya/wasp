@@ -608,36 +608,6 @@ func reverse(orig []string) []string {
 	return ret
 }
 
-func TestSnapshot1(t *testing.T) {
-	runTest := func(name string, data []string) {
-		t.Run(name, func(t *testing.T) {
-			store1 := NewInMemoryKVStore()
-			initRoot1 := trie.MustInitRoot(store1)
-			tr1, err := trie.NewTrieUpdatable(store1, initRoot1)
-			require.NoError(t, err)
-
-			_, root1 := runUpdateScenario(tr1, store1, data)
-			storeData := NewInMemoryKVStore()
-			tr1.SnapshotData(storeData)
-
-			store2 := NewInMemoryKVStore()
-			initRoot2 := trie.MustInitRoot(store2)
-			tr2, err := trie.NewTrieUpdatable(store2, initRoot2)
-			require.NoError(t, err)
-
-			storeData.Iterate(func(k, v []byte) bool {
-				tr2.Update(k, v)
-				return true
-			})
-			root2 := tr2.Commit(store2)
-
-			require.Equal(t, root1, root2)
-		})
-	}
-	runTest("1", []string{"a", "ab", "abc", "1", "2", "3", "11"})
-	runTest("rnd", genRnd3())
-}
-
 func TestSnapshot2(t *testing.T) {
 	runTest := func(data []string) {
 		store1 := NewInMemoryKVStore()
@@ -647,7 +617,7 @@ func TestSnapshot2(t *testing.T) {
 
 		_, root1 := runUpdateScenario(tr1, store1, data)
 		store2 := NewInMemoryKVStore()
-		tr1.Snapshot(store2)
+		tr1.CopyToStore(store2)
 
 		tr2, err := trie.NewTrieUpdatable(store2, root1)
 		require.NoError(t, err)
