@@ -42,12 +42,40 @@ type Traversable interface {
 	Iterator(prefix []byte) KVIterator
 }
 
-// CopyAll flushes KVIterator to KVWriter. It is up to the iterator correctly stop iterating
-func CopyAll(dst KVWriter, src KVIterator) {
-	src.Iterate(func(k, v []byte) bool {
-		dst.Set(k, v)
-		return true
-	})
+type kvStorePartition struct {
+	prefix byte
+	s      KVStore
+}
+
+func (p *kvStorePartition) Get(key []byte) []byte {
+	return p.s.Get(concat([]byte{p.prefix}, key))
+}
+
+func (p *kvStorePartition) Has(key []byte) bool {
+	return p.s.Has(concat([]byte{p.prefix}, key))
+}
+
+func (p *kvStorePartition) Del(key []byte) {
+	p.s.Del(concat([]byte{p.prefix}, key))
+}
+
+func (p *kvStorePartition) Set(key []byte, value []byte) {
+	p.s.Set(concat([]byte{p.prefix}, key), value)
+}
+
+func (p *kvStorePartition) Iterate(func(k []byte, v []byte) bool) {
+	panic("unimplemented")
+}
+
+func (p *kvStorePartition) IterateKeys(func(k []byte) bool) {
+	panic("unimplemented")
+}
+
+func makeKVStorePartition(s KVStore, prefix byte) *kvStorePartition {
+	return &kvStorePartition{
+		prefix: prefix,
+		s:      s,
+	}
 }
 
 type readerPartition struct {

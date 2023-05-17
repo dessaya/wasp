@@ -224,7 +224,7 @@ func TestBaseUpdate(t *testing.T) {
 
 var traceScenarios = false
 
-func runUpdateScenario(trieUpdatable *trie.TrieUpdatable, store trie.KVWriter, scenario []string) (map[string]string, trie.Hash) {
+func runUpdateScenario(trieUpdatable *trie.TrieUpdatable, store trie.KVStore, scenario []string) (map[string]string, trie.Hash) {
 	checklist := make(map[string]string)
 	uncommitted := false
 	var ret trie.Hash

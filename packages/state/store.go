@@ -22,23 +22,16 @@ type store struct {
 	// stateCache is a cache of immutable state readers by trie root. Reusing the
 	// State instances allows to better take advantage of its internal caches.
 	stateCache *lru.Cache[trie.Hash, *state]
-
-	keepLatest int
 }
 
-func NewStore(db kvstore.KVStore, keepLatest ...int) Store {
+func NewStore(db kvstore.KVStore) Store {
 	stateCache, err := lru.New[trie.Hash, *state](100)
 	if err != nil {
 		panic(err)
 	}
-	kl := -1
-	if len(keepLatest) > 0 {
-		kl = keepLatest[0]
-	}
 	return &store{
 		db:         &storeDB{db},
 		stateCache: stateCache,
-		keepLatest: kl,
 	}
 }
 
@@ -143,10 +136,11 @@ func (s *store) ExtractBlock(d StateDraft) Block {
 func (s *store) Commit(d StateDraft) Block {
 	block, muts := s.extractBlock(d)
 	s.db.commitToDB(muts)
-	if s.keepLatest > 0 {
-		trie.Prune(trieStore(s.db), block.TrieRoot(), s.keepLatest)
-	}
 	return block
+}
+
+func (s *store) Prune(trieRoot trie.Hash) (trie.PruneStats, error) {
+	return trie.Prune(trieStore(s.db), trieRoot)
 }
 
 func (s *store) SetLatest(trieRoot trie.Hash) error {

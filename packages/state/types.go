@@ -75,6 +75,9 @@ type Store interface {
 	// RestoreSnapshot restores the block and trie from the given snapshot.
 	// It is not required for the previous trie root to be present in the DB.
 	RestoreSnapshot(trie.Hash, kvstore.KVStore) error
+
+	// Prune deletes the trie with the given root from the DB
+	Prune(trie.Hash) (trie.PruneStats, error)
 }
 
 // A Block contains the mutations between the previous and current states,
