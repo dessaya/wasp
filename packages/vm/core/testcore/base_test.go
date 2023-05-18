@@ -512,7 +512,7 @@ func TestMessageSize(t *testing.T) {
 	err := ch.DeployContract(nil, sbtestsc.Contract.Name, sbtestsc.Contract.ProgramHash)
 	require.NoError(t, err)
 
-	initialBlockIndex := ch.GetLatestBlockInfo().BlockIndex
+	initialBlockIndex := ch.GetLatestBlockInfo().BlockIndex()
 
 	reqSize := 5_000 // bytes
 	storageDeposit := 1 * isc.Million
@@ -535,11 +535,12 @@ func TestMessageSize(t *testing.T) {
 		reqs[i] = req
 	}
 
+	ch.WaitForRequestsMark()
 	env.AddRequestsToChainMempoolWaitUntilInbufferEmpty(ch, reqs)
-	ch.WaitUntilMempoolIsEmpty()
+	ch.WaitForRequestsThrough(len(reqs))
 
 	// request outputs are so large that they have to be processed in two separate blocks
-	require.Equal(t, initialBlockIndex()+2, ch.GetLatestBlockInfo().BlockIndex())
+	require.Equal(t, initialBlockIndex+2, ch.GetLatestBlockInfo().BlockIndex())
 
 	for _, req := range reqs {
 		receipt, err := ch.GetRequestReceipt(req.ID())
