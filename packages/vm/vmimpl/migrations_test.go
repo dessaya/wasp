@@ -17,7 +17,6 @@ import (
 	"github.com/iotaledger/wasp/packages/vm"
 	"github.com/iotaledger/wasp/packages/vm/core/governance"
 	"github.com/iotaledger/wasp/packages/vm/core/migrations"
-	"github.com/iotaledger/wasp/packages/vm/core/migrations/allmigrations"
 	"github.com/iotaledger/wasp/packages/vm/core/root"
 )
 
@@ -91,17 +90,17 @@ func newMigrationsTest(t *testing.T) *migrationsTestEnv {
 func TestMigrations(t *testing.T) {
 	env := newMigrationsTest(t)
 
-	require.EqualValues(t, allmigrations.LatestSchemaVersion, env.getSchemaVersion())
+	require.EqualValues(t, migrations.LatestSchemaVersion, env.getSchemaVersion())
 
 	env.vmctx.withStateUpdate(func(chainState kv.KVStore) {
 		env.vmctx.runMigrations(chainState, &migrations.MigrationScheme{
-			BaseSchemaVersion: allmigrations.LatestSchemaVersion,
+			BaseSchemaVersion: migrations.LatestSchemaVersion,
 			Migrations:        []migrations.Migration{env.incCounter, env.incCounter, env.incCounter},
 		})
 	})
 
 	require.EqualValues(t, 3, env.counter)
-	require.EqualValues(t, allmigrations.LatestSchemaVersion+3, env.getSchemaVersion())
+	require.EqualValues(t, migrations.LatestSchemaVersion+3, env.getSchemaVersion())
 }
 
 func TestMigrationsCurrent1(t *testing.T) {

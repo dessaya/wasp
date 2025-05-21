@@ -5,7 +5,7 @@ import (
 
 	"github.com/iotaledger/wasp/packages/isc"
 	"github.com/iotaledger/wasp/packages/util/rwutil"
-	"github.com/iotaledger/wasp/packages/vm/core/migrations/allmigrations"
+	"github.com/iotaledger/wasp/packages/vm/core/migrations"
 )
 
 const (
@@ -21,7 +21,7 @@ This works very well for BaseToken and NFTs, not for NativeToken.
 This needs some validation regarding the compatibility between IDs.
 */
 func AssetsToBytes(v isc.SchemaVersion, assets *isc.Assets) []byte {
-	if v > allmigrations.SchemaVersionMigratedRebased {
+	if v > migrations.SchemaVersionMigratedRebased {
 		return assets.Bytes()
 	}
 

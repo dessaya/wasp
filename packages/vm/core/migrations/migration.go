@@ -13,6 +13,16 @@ import (
 	"github.com/iotaledger/wasp/packages/kv"
 )
 
+const (
+	// versions prior to 5 correspond to stardust
+	// version 5 acts as a marker for migrated stardust blocks in case legacy behavior needs to be introduced.
+	SchemaVersionMigratedRebased           = 5 + iota
+	SchemaVersionIotaRebased               // 6
+	SchemaVersionFixedCommonAccountBalance // 7
+
+	LatestSchemaVersion = SchemaVersionFixedCommonAccountBalance
+)
+
 type Migration struct {
 	Contract *coreutil.ContractInfo
 	Apply    func(contractState kv.KVStore, log log.Logger) error

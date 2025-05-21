@@ -3,7 +3,7 @@ package legacy
 
 import (
 	"github.com/iotaledger/wasp/packages/isc"
-	"github.com/iotaledger/wasp/packages/vm/core/migrations/allmigrations"
+	"github.com/iotaledger/wasp/packages/vm/core/migrations"
 )
 
 /*
@@ -20,7 +20,7 @@ Rebased AgentID is:
 Ethereum/Nil/Contract AgentIDs remain untouched.
 */
 func AgentIDToBytes(v isc.SchemaVersion, id isc.AgentID) []byte {
-	if v > allmigrations.SchemaVersionMigratedRebased {
+	if v > migrations.SchemaVersionMigratedRebased {
 		return id.Bytes()
 	}
 

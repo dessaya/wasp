@@ -43,7 +43,7 @@ import (
 	"github.com/iotaledger/wasp/packages/vm/core/evm"
 	"github.com/iotaledger/wasp/packages/vm/core/evm/emulator"
 	"github.com/iotaledger/wasp/packages/vm/core/governance"
-	"github.com/iotaledger/wasp/packages/vm/core/migrations/allmigrations"
+	"github.com/iotaledger/wasp/packages/vm/core/migrations"
 	"github.com/iotaledger/wasp/packages/vm/core/root"
 	"github.com/iotaledger/wasp/packages/vm/gas"
 )
@@ -701,7 +701,7 @@ func (e *EVMChain) iscRequestsInBlock(evmBlockNumber uint64) (*blocklog.BlockInf
 
 		// in order to correctly trace stardust requests we need to be
 		// sure to charge exactly the same amount of gas units
-		if v < allmigrations.SchemaVersionIotaRebased {
+		if v < migrations.SchemaVersionIotaRebased {
 			enforceGasBurned = append(enforceGasBurned, vm.EnforceGasBurned{
 				Error:     rec.Error,
 				GasBurned: rec.GasBurned,

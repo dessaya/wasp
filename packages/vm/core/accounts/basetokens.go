@@ -9,11 +9,11 @@ import (
 	"github.com/iotaledger/wasp/packages/kv/codec"
 	"github.com/iotaledger/wasp/packages/parameters"
 	"github.com/iotaledger/wasp/packages/util"
-	"github.com/iotaledger/wasp/packages/vm/core/migrations/allmigrations"
+	"github.com/iotaledger/wasp/packages/vm/core/migrations"
 )
 
 func (s *StateReader) getBaseTokens(accountKey kv.Key) (baseTokens coin.Value, remainderWei *big.Int) {
-	if s.v < allmigrations.SchemaVersionMigratedRebased {
+	if s.v < migrations.SchemaVersionMigratedRebased {
 		panic("unsupported schema version")
 	}
 	baseTokens = s.getCoinBalance(accountKey, coin.BaseTokenType)
@@ -29,7 +29,7 @@ func (s *StateReader) getBaseTokensFullDecimals(accountKey kv.Key) *big.Int {
 }
 
 func (s *StateWriter) setBaseTokens(accountKey kv.Key, baseTokens coin.Value, remainderWei *big.Int) {
-	if s.v < allmigrations.SchemaVersionMigratedRebased {
+	if s.v < migrations.SchemaVersionMigratedRebased {
 		panic("unsupported schema version")
 	}
 	s.setCoinBalance(accountKey, coin.BaseTokenType, baseTokens)

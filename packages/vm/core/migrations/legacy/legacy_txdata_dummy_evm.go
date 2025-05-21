@@ -5,13 +5,13 @@ import (
 
 	"github.com/iotaledger/wasp/packages/isc"
 	"github.com/iotaledger/wasp/packages/kv/codec"
-	"github.com/iotaledger/wasp/packages/vm/core/migrations/allmigrations"
+	"github.com/iotaledger/wasp/packages/vm/core/migrations"
 )
 
 // EncodeUint32ForDummyTX encodes uint32s in the same way as it was on Stardust
 // This is only needed for DummyTX to ensure legacy compatibility.
 func EncodeUint32ForDummyTX(v isc.SchemaVersion, val uint32) []byte {
-	if v > allmigrations.SchemaVersionMigratedRebased {
+	if v > migrations.SchemaVersionMigratedRebased {
 		return codec.Encode(val)
 	}
 
@@ -23,7 +23,7 @@ func EncodeUint32ForDummyTX(v isc.SchemaVersion, val uint32) []byte {
 // EncodeUint16ForDummyTX encodes uint16s in the same way as it was on Stardust
 // This is only needed for DummyTX to ensure legacy compatibility.
 func EncodeUint16ForDummyTX(v isc.SchemaVersion, val uint16) []byte {
-	if v > allmigrations.SchemaVersionMigratedRebased {
+	if v > migrations.SchemaVersionMigratedRebased {
 		return codec.Encode(val)
 	}
 

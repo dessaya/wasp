@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/iotaledger/wasp/packages/chain/statemanager/snapshots"
+	"github.com/iotaledger/wasp/packages/vm/core/migrations"
 
 	"github.com/stretchr/testify/require"
 
@@ -26,7 +27,6 @@ import (
 	"github.com/iotaledger/wasp/packages/testutil/testlogger"
 	"github.com/iotaledger/wasp/packages/util"
 	"github.com/iotaledger/wasp/packages/util/timeutil"
-	"github.com/iotaledger/wasp/packages/vm/core/migrations/allmigrations"
 )
 
 type testEnv struct {
@@ -127,7 +127,7 @@ func (teT *testEnv) addVariedNodes(
 		sms[nodeID], err = New(chainID, loadedSnapshotStateIndex, nr, wal, store, mockStateManagerMetrics(), smLog, teT.parameters)
 		require.NoError(teT.t, err)
 		snapms[nodeID] = snapshotManager
-		origin.InitChain(allmigrations.LatestSchemaVersion, store, teT.bf.GetChainInitParameters(), iotago.ObjectID{}, 0, parameterstest.L1Mock)
+		origin.InitChain(migrations.LatestSchemaVersion, store, teT.bf.GetChainInitParameters(), iotago.ObjectID{}, 0, parameterstest.L1Mock)
 	}
 	teT.nodeIDs = nodeIDs
 	teT.sms = sms

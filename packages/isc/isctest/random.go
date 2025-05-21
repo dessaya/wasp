@@ -16,7 +16,7 @@ import (
 	"github.com/iotaledger/wasp/packages/isc"
 	"github.com/iotaledger/wasp/packages/state/statetest"
 	"github.com/iotaledger/wasp/packages/transaction"
-	"github.com/iotaledger/wasp/packages/vm/core/migrations/allmigrations"
+	"github.com/iotaledger/wasp/packages/vm/core/migrations"
 	"github.com/iotaledger/wasp/packages/vm/gas"
 )
 
@@ -80,7 +80,7 @@ func UpdateStateAnchor(anchor *isc.StateAnchor, stateMetadata ...[]byte) *isc.St
 		a.Object.StateMetadata = stateMetadata[0]
 	} else {
 		a.Object.StateMetadata = transaction.NewStateMetadata(
-			allmigrations.LatestSchemaVersion,
+			migrations.LatestSchemaVersion,
 			statetest.NewRandL1Commitment(),
 			&iotago.ObjectID{},
 			gas.DefaultFeePolicy(),

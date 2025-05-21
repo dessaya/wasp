@@ -30,7 +30,7 @@ import (
 	"github.com/iotaledger/wasp/packages/transaction"
 	"github.com/iotaledger/wasp/packages/vm/core/accounts"
 	"github.com/iotaledger/wasp/packages/vm/core/coreprocessors"
-	"github.com/iotaledger/wasp/packages/vm/core/migrations/allmigrations"
+	"github.com/iotaledger/wasp/packages/vm/core/migrations"
 	"github.com/iotaledger/wasp/packages/vm/vmimpl"
 )
 
@@ -74,7 +74,7 @@ func testConsBasic(t *testing.T, n, f int) {
 	initParams := origin.DefaultInitParams(isc.NewAddressAgentID(committeeAddress)).Encode()
 	db := mapdb.NewMapDB()
 	store := indexedstore.New(state.NewStoreWithUniqueWriteMutex(db))
-	_, stateMetadata := origin.InitChain(allmigrations.LatestSchemaVersion, store, initParams, iotago.ObjectID{}, 0, parameterstest.L1Mock)
+	_, stateMetadata := origin.InitChain(migrations.LatestSchemaVersion, store, initParams, iotago.ObjectID{}, 0, parameterstest.L1Mock)
 
 	stateAnchor0x := isctest.RandomStateAnchor(isctest.RandomAnchorOption{StateMetadata: stateMetadata})
 	stateAnchor0 := &stateAnchor0x

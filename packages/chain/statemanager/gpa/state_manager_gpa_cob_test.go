@@ -16,7 +16,7 @@ import (
 	"github.com/iotaledger/wasp/packages/state"
 	"github.com/iotaledger/wasp/packages/testutil/testlogger"
 	"github.com/iotaledger/wasp/packages/util/pipe"
-	"github.com/iotaledger/wasp/packages/vm/core/migrations/allmigrations"
+	"github.com/iotaledger/wasp/packages/vm/core/migrations"
 )
 
 func initTestChainOfBlocks(t *testing.T) (
@@ -32,7 +32,7 @@ func initTestChainOfBlocks(t *testing.T) (
 	require.NoError(t, err)
 	sm, ok := smGPA.(*stateManagerGPA)
 	require.True(t, ok)
-	origin.InitChain(allmigrations.LatestSchemaVersion, store, bf.GetChainInitParameters(), iotago.ObjectID{}, 0, parameterstest.L1Mock)
+	origin.InitChain(migrations.LatestSchemaVersion, store, bf.GetChainInitParameters(), iotago.ObjectID{}, 0, parameterstest.L1Mock)
 	return log, bf, store, sm
 }
 

@@ -24,7 +24,7 @@ import (
 	"github.com/iotaledger/wasp/packages/parameters/parameterstest"
 	"github.com/iotaledger/wasp/packages/state"
 	"github.com/iotaledger/wasp/packages/transaction"
-	"github.com/iotaledger/wasp/packages/vm/core/migrations/allmigrations"
+	"github.com/iotaledger/wasp/packages/vm/core/migrations"
 	"github.com/iotaledger/wasp/packages/vm/gas"
 )
 
@@ -55,10 +55,10 @@ func NewBlockFactory(t require.TestingT, chainInitParamsOpt ...BlockFactoryCallA
 	chainID := isctest.RandomChainID()
 	chainIDObjID := chainID.AsObjectID()
 	chainStore := state.NewStoreWithUniqueWriteMutex(mapdb.NewMapDB())
-	originBlock, _ := origin.InitChain(allmigrations.LatestSchemaVersion, chainStore, chainInitParams, iotago.ObjectID{}, 0, parameterstest.L1Mock)
+	originBlock, _ := origin.InitChain(migrations.LatestSchemaVersion, chainStore, chainInitParams, iotago.ObjectID{}, 0, parameterstest.L1Mock)
 	originCommitment := originBlock.L1Commitment()
 	originStateMetadata := transaction.NewStateMetadata(
-		allmigrations.LatestSchemaVersion,
+		migrations.LatestSchemaVersion,
 		originBlock.L1Commitment(),
 		&iotago.ObjectID{},
 		gas.DefaultFeePolicy(),
@@ -139,11 +139,11 @@ func (bfT *BlockFactory) GetChainInitParameters() isc.CallArguments {
 }
 
 func (bfT *BlockFactory) GetOriginAnchor() *isc.StateAnchor {
-	return bfT.GetAnchor(origin.L1Commitment(allmigrations.LatestSchemaVersion, bfT.chainInitParams, iotago.ObjectID{}, 0, parameterstest.L1Mock))
+	return bfT.GetAnchor(origin.L1Commitment(migrations.LatestSchemaVersion, bfT.chainInitParams, iotago.ObjectID{}, 0, parameterstest.L1Mock))
 }
 
 func (bfT *BlockFactory) GetOriginBlock() state.Block {
-	block, err := bfT.store.BlockByTrieRoot(origin.L1Commitment(allmigrations.LatestSchemaVersion, bfT.chainInitParams, iotago.ObjectID{}, 0, parameterstest.L1Mock).TrieRoot())
+	block, err := bfT.store.BlockByTrieRoot(origin.L1Commitment(migrations.LatestSchemaVersion, bfT.chainInitParams, iotago.ObjectID{}, 0, parameterstest.L1Mock).TrieRoot())
 	require.NoError(bfT.t, err)
 	return block
 }

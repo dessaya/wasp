@@ -5,20 +5,18 @@ import (
 	"github.com/iotaledger/hive.go/log"
 	"github.com/iotaledger/wasp/packages/kv"
 	"github.com/iotaledger/wasp/packages/vm/core/migrations"
+	"github.com/iotaledger/wasp/packages/vm/core/migrations/m007-fix-common-account-balance"
 	"github.com/iotaledger/wasp/packages/vm/core/root"
 )
 
-const (
-	// versions prior to 5 correspond to stardust
-	// version 5 acts as a marker for migrated stardust blocks in case legacy behavior needs to be introduced.
-	SchemaVersionMigratedRebased = 5 + iota
-	SchemaVersionIotaRebased
-
-	LatestSchemaVersion = SchemaVersionIotaRebased
-)
+func init() {
+	if migrations.LatestSchemaVersion != DefaultScheme.LatestSchemaVersion() {
+		panic("migrations.LatestSchemaVersion != DefaultScheme.LatestSchemaVersion()")
+	}
+}
 
 var DefaultScheme = &migrations.MigrationScheme{
-	BaseSchemaVersion: SchemaVersionMigratedRebased,
+	BaseSchemaVersion: migrations.SchemaVersionMigratedRebased,
 
 	// Add new migrations to the end of this list, and they will be applied before
 	// creating the next block.
@@ -36,5 +34,6 @@ var DefaultScheme = &migrations.MigrationScheme{
 			},
 			Contract: root.Contract,
 		},
+		m007.FixCommonAccountBalance,
 	},
 }

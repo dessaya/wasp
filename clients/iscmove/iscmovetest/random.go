@@ -12,7 +12,7 @@ import (
 	"github.com/iotaledger/wasp/packages/isc"
 	"github.com/iotaledger/wasp/packages/state"
 	"github.com/iotaledger/wasp/packages/transaction"
-	"github.com/iotaledger/wasp/packages/vm/core/migrations/allmigrations"
+	"github.com/iotaledger/wasp/packages/vm/core/migrations"
 	"github.com/iotaledger/wasp/packages/vm/gas"
 )
 
@@ -29,10 +29,9 @@ func RandomAnchor(opts ...RandomAnchorOption) iscmove.Anchor {
 		ID:   *iotatest.RandomAddress(),
 		Size: uint64(rand.Int63()),
 	}
-	schemaVersion := allmigrations.DefaultScheme.LatestSchemaVersion()
 	initParams := isc.NewCallArguments([]byte{1, 2, 3})
 	stateMetadata := transaction.NewStateMetadata(
-		schemaVersion,
+		migrations.LatestSchemaVersion,
 		&state.L1Commitment{}, // FIXME properly set trieRoot, blockHash
 		&iotago.ObjectID{},
 		gas.DefaultFeePolicy(),
