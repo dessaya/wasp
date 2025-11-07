@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
 
 	"github.com/iotaledger/wasp/v2/clients/iota-go/iotago/iotatest"
@@ -76,7 +75,7 @@ func testChainMgrBasic(t *testing.T, n, f int) {
 	anchor, deposit := tcl.MakeTxChainOrigin()
 	//
 	// Construct the nodes.
-	nodes := map[gpa.NodeID]gpa.GPA{}
+	nodes := map[gpa.NodeID]*chainmanager.ChainMgr{}
 	stores := map[gpa.NodeID]state.Store{}
 	needCons := map[gpa.NodeID]*chainmanager.NeedConsensusMap{}
 	for i, nid := range nodeIDs {
@@ -120,22 +119,19 @@ func testChainMgrBasic(t *testing.T, n, f int) {
 			log.NewChildLogger(nid.ShortString()),
 		)
 		require.NoError(t, err)
-		nodes[nid] = cm.AsGPA()
+		nodes[nid] = cm
+		nodes[nid].InputAnchorConfirmed(committeeAddrA, anchor)
 	}
 	tc := gpa.NewTestContext(nodes)
 	tc.PrintAllStatusStrings("Started", t.Logf)
 	//
 	// Provide initial Anchor.
 	// Nevertheless, the first round after a reboot should have ⊥ as input to synchronize with each other.
-	initAnchorInputs := map[gpa.NodeID]gpa.Input{}
-	for nid := range nodes {
-		initAnchorInputs[nid] = chainmanager.NewInputAnchorConfirmed(committeeAddrA, anchor)
-	}
-	tc.WithInputs(initAnchorInputs).RunAll()
+	tc.RunAll()
 	tc.PrintAllStatusStrings("Initial Anchor received", t.Logf)
 	initAnchorLogIndex := committeelog.NilLogIndex()
 	for nid, n := range nodes {
-		out := n.Output().(*chainmanager.Output)
+		out := n.Output()
 		ncm := needCons[nid]
 		require.Equal(t, 0, out.NeedPublishTX().Size())
 		require.NotNil(t, ncm)
@@ -151,17 +147,16 @@ func testChainMgrBasic(t *testing.T, n, f int) {
 	//
 	// All proposed NIL, thus consensus should output NIL as well.
 	// So, we report consensus output to the chainMgr as ⊥.
-	inputs := map[gpa.NodeID]gpa.Input{}
 	for nid := range nodes {
-		inputs[nid] = chainmanager.NewInputConsensusOutputSkip(*committeeAddrA, initAnchorLogIndex)
+		nodes[nid].InputConsensusOutputSkip(*committeeAddrA, initAnchorLogIndex)
 	}
-	tc.WithInputs(inputs).RunAll()
+	tc.RunAll()
 	tc.PrintAllStatusStrings("Next Anchor received", t.Logf)
 	//
 	// Now the next consensus instance should be requested.
 	// Since the previous consensus decided ⊥, now all the nodes will propose the latest Anchor received from L1.
 	for nid, n := range nodes {
-		out := n.Output().(*chainmanager.Output)
+		out := n.Output()
 		ncm := needCons[nid]
 		require.Equal(t, 0, out.NeedPublishTX().Size())
 		require.NotNil(t, ncm)
@@ -189,17 +184,18 @@ func testChainMgrBasic(t *testing.T, n, f int) {
 		ID:         anchor.GetObjectID(),
 		StateIndex: &tx1OutSI,
 	})
-	tc.WithInputs(lo.SliceToMap(nodeIDs, func(nid gpa.NodeID) (gpa.NodeID, gpa.Input) {
-		return nid, chainmanager.NewInputChainTxPublishResult(
+	for nid := range nodes {
+		nodes[nid].InputChainTxPublishResult(
 			*committeeAddrA,
 			committeelog.LogIndex(2),
 			*tx1Digest,
 			&tx1OutAnchor,
 			true,
 		)
-	})).RunAll()
+	}
+	tc.RunAll()
 	for nid, n := range nodes {
-		out := n.Output().(*chainmanager.Output)
+		out := n.Output()
 		ncm := needCons[nid]
 		require.Equal(t, 0, out.NeedPublishTX().Size())
 		require.NotNil(t, ncm)

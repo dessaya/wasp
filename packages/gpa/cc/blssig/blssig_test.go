@@ -48,22 +48,21 @@ func testBasic(t *testing.T, nodeCount, threshold, silent int) {
 		if i >= nodeCount-silent {
 			nodes[ni] = gpa.MakeTestSilentNode()
 		} else {
-			nodes[ni] = blssig.New(suite, nodeIDs, commits, priShares[i], threshold, nodeIDs[i], []byte{1, 2, 3}, log)
+			node := blssig.New(suite, nodeIDs, commits, priShares[i], threshold, nodeIDs[i], []byte{1, 2, 3}, log)
+			nodes[ni] = node
+			node.Input()
 		}
 	}
-	inputs := map[gpa.NodeID]gpa.Input{}
-	for i := range nodeIDs {
-		inputs[nodeIDs[i]] = nil
-	}
 	tc := gpa.NewTestContext(nodes)
-	tc.WithInputs(inputs).RunAll()
+	tc.RunAll()
 	tc.PrintAllStatusStrings("done", t.Logf)
 	for i, ni := range nodeIDs {
 		if i >= nodeCount-silent {
 			continue
 		}
-		out := nodes[ni].Output()
+		node := nodes[ni].(*blssig.CommonCoin)
+		out := node.Output()
 		require.NotNil(t, out)
-		require.Equal(t, nodes[nodeIDs[0]].Output(), out)
+		require.Equal(t, nodes[nodeIDs[0]].(*blssig.CommonCoin).Output(), out)
 	}
 }

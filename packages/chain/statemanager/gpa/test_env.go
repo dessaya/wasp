@@ -35,10 +35,10 @@ type testEnv struct {
 	bf         *gpautils.BlockFactory
 	nodeIDs    []gpa.NodeID
 	parameters StateManagerParameters
-	sms        map[gpa.NodeID]gpa.GPA
+	sms        map[gpa.NodeID]*StateManagerGPA
 	stores     map[gpa.NodeID]state.Store
 	snapms     map[gpa.NodeID]snapshots.SnapshotManager
-	tc         *gpa.TestContext
+	tc         *gpa.TestContext[*StateManagerGPA]
 	log        log.Logger
 }
 
@@ -116,7 +116,7 @@ func (teT *testEnv) addVariedNodes(
 	createWALFun func(gpa.NodeID) gpautils.TestBlockWAL,
 	createSnapMFun func(nodeID gpa.NodeID, origStore, nodeStore state.Store, tp timeutil.TimeProvider, log log.Logger) snapshots.SnapshotManager,
 ) {
-	sms := make(map[gpa.NodeID]gpa.GPA)
+	sms := make(map[gpa.NodeID]*StateManagerGPA)
 	stores := make(map[gpa.NodeID]state.Store)
 	snapms := make(map[gpa.NodeID]snapshots.SnapshotManager)
 	chainID := teT.bf.GetChainID()
@@ -138,16 +138,17 @@ func (teT *testEnv) addVariedNodes(
 	teT.sms = sms
 	teT.snapms = snapms
 	teT.stores = stores
-	teT.tc = gpa.NewTestContext(sms).WithOutputHandler(func(nodeID gpa.NodeID, outputOrig gpa.Output) {
-		output, ok := outputOrig.(StateManagerOutput)
-		require.True(teT.t, ok)
-		snapshotManager, ok := teT.snapms[nodeID]
-		require.True(teT.t, ok)
-		for _, snapshotInfo := range output.TakeBlocksCommitted() {
-			snapshotManager.BlockCommittedAsync(snapshotInfo)
-		}
-		for _, nextInput := range output.TakeNextInputs() {
-			teT.tc.WithInputs(map[gpa.NodeID]gpa.Input{nodeID: nextInput}).RunAll()
+	teT.tc = gpa.NewTestContext(sms).WithLoopHandler(func() {
+		for nodeID, sm := range sms {
+			output := sm.Output()
+			snapshotManager, ok := teT.snapms[nodeID]
+			require.True(teT.t, ok)
+			for _, snapshotInfo := range output.TakeBlocksCommitted() {
+				snapshotManager.BlockCommittedAsync(snapshotInfo)
+			}
+			for _, nextInput := range output.TakeBlocksToCommit() {
+				sm.InputStateManagerBlocksToCommit(nextInput)
+			}
 		}
 	})
 }
@@ -197,7 +198,8 @@ func (teT *testEnv) sendAndEnsureCompletedConsensusBlockProduced(block state.Blo
 
 func (teT *testEnv) sendConsensusBlockProduced(block state.Block, nodeID gpa.NodeID) <-chan state.Block {
 	input, responseCh := inputs.NewConsensusBlockProduced(context.Background(), teT.bf.GetStateDraft(block))
-	teT.tc.WithInputs(map[gpa.NodeID]gpa.Input{nodeID: input}).RunAll()
+	teT.sms[nodeID].InputConsensusBlockProduced(input)
+	teT.tc.RunAll()
 	return responseCh
 }
 
@@ -222,7 +224,8 @@ func (teT *testEnv) sendAndEnsureCompletedConsensusStateProposal(commitment *sta
 
 func (teT *testEnv) sendConsensusStateProposal(commitment *state.L1Commitment, nodeID gpa.NodeID) <-chan any {
 	input, responseCh := inputs.NewConsensusStateProposal(context.Background(), teT.bf.GetAnchor(commitment))
-	teT.tc.WithInputs(map[gpa.NodeID]gpa.Input{nodeID: input}).RunAll()
+	teT.sms[nodeID].InputConsensusStateProposal(input)
+	teT.tc.RunAll()
 	return responseCh
 }
 
@@ -247,7 +250,8 @@ func (teT *testEnv) sendAndEnsureCompletedConsensusDecidedState(commitment *stat
 
 func (teT *testEnv) sendConsensusDecidedState(commitment *state.L1Commitment, nodeID gpa.NodeID) <-chan state.State {
 	input, responseCh := inputs.NewConsensusDecidedState(context.Background(), teT.bf.GetAnchor(commitment))
-	teT.tc.WithInputs(map[gpa.NodeID]gpa.Input{nodeID: input}).RunAll()
+	teT.sms[nodeID].InputConsensusDecidedState(input)
+	teT.tc.RunAll()
 	return responseCh
 }
 
@@ -273,7 +277,8 @@ func (teT *testEnv) sendAndEnsureCompletedChainFetchStateDiff(oldCommitment, new
 
 func (teT *testEnv) sendChainFetchStateDiff(oldCommitment, newCommitment *state.L1Commitment, nodeID gpa.NodeID) <-chan *inputs.ChainFetchStateDiffResults {
 	input, responseCh := inputs.NewChainFetchStateDiff(context.Background(), teT.bf.GetAnchor(oldCommitment), teT.bf.GetAnchor(newCommitment))
-	teT.tc.WithInputs(map[gpa.NodeID]gpa.Input{nodeID: input}).RunAll()
+	teT.sms[nodeID].InputChainFetchStateDiff(input)
+	teT.tc.RunAll()
 	return responseCh
 }
 
@@ -345,17 +350,9 @@ func (teT *testEnv) sendTimerTickToNodes(delay time.Duration) {
 	now := teT.parameters.TimeProvider.GetNow().Add(delay)
 	teT.parameters.TimeProvider.SetNow(now)
 	teT.t.Logf("Time %v is sent to nodes %s", now, util.SliceShortString(teT.nodeIDs))
-	teT.sendInputToNodes(func(_ gpa.NodeID) gpa.Input {
-		return inputs.NewStateManagerTimerTick(now)
-	})
-}
-
-func (teT *testEnv) sendInputToNodes(makeInputFun func(gpa.NodeID) gpa.Input) {
-	inputs := make(map[gpa.NodeID]gpa.Input)
 	for _, nodeID := range teT.nodeIDs {
-		inputs[nodeID] = makeInputFun(nodeID)
+		teT.sms[nodeID].InputStateManagerTimerTick(now)
 	}
-	teT.tc.WithInputs(inputs).RunAll()
 }
 
 func mockStateManagerMetrics() *metrics.ChainStateManagerMetrics {

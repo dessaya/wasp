@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/iotaledger/wasp/v2/packages/gpa"
 	"github.com/iotaledger/wasp/v2/packages/isc"
 	"github.com/iotaledger/wasp/v2/packages/state"
 	"github.com/iotaledger/wasp/v2/packages/transaction"
@@ -19,8 +18,6 @@ type ChainFetchStateDiff struct {
 	newL1Commitment *state.L1Commitment
 	resultCh        chan<- *ChainFetchStateDiffResults
 }
-
-var _ gpa.Input = &ChainFetchStateDiff{}
 
 func NewChainFetchStateDiff(ctx context.Context, prevAnchor, nextAnchor *isc.StateAnchor) (*ChainFetchStateDiff, <-chan *ChainFetchStateDiffResults) {
 	if prevAnchor == nil {

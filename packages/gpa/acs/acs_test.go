@@ -11,6 +11,7 @@ import (
 
 	"github.com/iotaledger/wasp/v2/packages/gpa"
 	"github.com/iotaledger/wasp/v2/packages/gpa/acs"
+	"github.com/iotaledger/wasp/v2/packages/gpa/cc"
 	"github.com/iotaledger/wasp/v2/packages/gpa/cc/blssig"
 	"github.com/iotaledger/wasp/v2/packages/gpa/cc/semi"
 	"github.com/iotaledger/wasp/v2/packages/tcrypto"
@@ -52,7 +53,7 @@ func testBasic(t *testing.T, n, f, silent int) {
 		} else {
 			nodeLog := log.NewChildLogger(nid.ShortString())
 			ii := i
-			makeCCInstFun := func(nodeID gpa.NodeID, round int) gpa.GPA {
+			makeCCInstFun := func(nodeID gpa.NodeID, round int) cc.CommonCoin {
 				sid := fmt.Sprintf("%s-%v", nodeID, round)
 				realCC := blssig.New(
 					suite, nodeIDs, commits, priShares[ii], ccThreshold,
@@ -60,25 +61,21 @@ func testBasic(t *testing.T, n, f, silent int) {
 				)
 				return semi.New(round, realCC)
 			}
-			nodes[nid] = acs.New(nodeIDs, nid, f, makeCCInstFun, nodeLog).AsGPA()
+			acs := acs.New(nodeIDs, nid, f, makeCCInstFun, nodeLog)
+			nodes[nid] = acs
+			acs.Input([]byte(fmt.Sprintf("%v-input", nid)))
 		}
 	}
 	tc := gpa.NewTestContext(nodes)
-	//
-	// Choose inputs.
-	inputs := map[gpa.NodeID]gpa.Input{}
-	for _, nid := range nodeIDs {
-		inputs[nid] = []byte(fmt.Sprintf("%v-input", nid))
-	}
-	tc.WithInputs(inputs).RunAll()
+	tc.RunAll()
 	tc.PrintAllStatusStrings("Done,", t.Logf)
 	//
-	out0 := nodes[nodeIDs[0]].Output().(*acs.Output)
+	out0 := nodes[nodeIDs[0]].(*acs.ACS).Output()
 	for i, nid := range nodeIDs {
 		if i >= n-silent {
 			continue
 		}
-		out := nodes[nid].Output().(*acs.Output)
+		out := nodes[nid].(*acs.ACS).Output()
 		require.NotNil(t, out)
 		require.True(t, out.Terminated)
 		require.Equal(t, out0.Values, out.Values)

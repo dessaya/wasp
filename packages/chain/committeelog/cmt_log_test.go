@@ -56,7 +56,7 @@ func testCommitteeLogBasic(t *testing.T, n, f int) {
 	//
 	// Construct the algorithm nodes.
 	gpaNodeIDs := gpa.NodeIDsFromPublicKeys(peerPubKeys)
-	gpaNodes := map[gpa.NodeID]gpa.GPA{}
+	gpaNodes := map[gpa.NodeID]*committeelog.CommitteeLog{}
 	for i := range gpaNodeIDs {
 		dkShare, err := committeeKeyShares[i].LoadDKShare(committeeAddress)
 		require.NoError(t, err)
@@ -83,7 +83,7 @@ func testCommitteeLogBasic(t *testing.T, n, f int) {
 			log.NewChildLogger(fmt.Sprintf("N%v", i)),
 		)
 		require.NoError(t, err)
-		gpaNodes[gpaNodeIDs[i]] = committeeLogInst.AsGPA()
+		gpaNodes[gpaNodeIDs[i]] = committeeLogInst
 	}
 	gpaTC := gpa.NewTestContext(gpaNodes)
 	//
@@ -95,14 +95,15 @@ func testCommitteeLogBasic(t *testing.T, n, f int) {
 	// FIXME is should be anchor state transition, instead of random anchor
 	ao1 := randomAnchorWithID(*aliasRef.ObjectID, committeeAddress, 1)
 	t.Logf("Anchor1=%v", ao1)
-	gpaTC.WithInputs(inputAnchorConfirmed(gpaNodes, ao1)).RunAll()
+	inputAnchorConfirmed(gpaNodes, ao1)
+	gpaTC.RunAll()
 	gpaTC.PrintAllStatusStrings("After Anchor1Recv", t.Logf)
-	cons1 := gpaNodes[gpaNodeIDs[0]].Output().(committeelog.Output)
+	cons1 := gpaNodes[gpaNodeIDs[0]].Output()
 	cons1Outs := map[gpa.NodeID]committeelog.Output{}
 	for nid, n := range gpaNodes {
 		require.NotNil(t, n.Output())
 		require.Equal(t, cons1, n.Output())
-		cons1Outs[nid] = n.Output().(committeelog.Output)
+		cons1Outs[nid] = n.Output()
 		require.Equal(t, 1, len(cons1Outs[nid]))
 		require.Nil(t, cons1Outs[nid][committeelog.LogIndex(1)])
 	}
@@ -111,12 +112,13 @@ func testCommitteeLogBasic(t *testing.T, n, f int) {
 	// FIXME is should be anchor state transition, instead of random anchor
 	ao2 := randomAnchorWithID(*aliasRef.ObjectID, committeeAddress, 2)
 	t.Logf("Anchor2=%v", ao2)
-	gpaTC.WithInputs(inputConsensusOutput(cons1Outs, ao2)).RunAll()
+	inputConsensusOutput(gpaNodes, cons1Outs, ao2)
+	gpaTC.RunAll()
 	gpaTC.PrintAllStatusStrings("After gpaMsgsAnchor2Cons", t.Logf)
-	cons2 := gpaNodes[gpaNodeIDs[0]].Output().(committeelog.Output)
+	cons2 := gpaNodes[gpaNodeIDs[0]].Output()
 	t.Logf("cons2=%v", cons2)
 	for _, n := range gpaNodes {
-		out := n.Output().(committeelog.Output)
+		out := n.Output()
 		require.NotNil(t, out)
 		require.Equal(t, cons2, out)
 		require.Equal(t, 2, len(out))
@@ -125,7 +127,8 @@ func testCommitteeLogBasic(t *testing.T, n, f int) {
 	}
 	//
 	// Anchor Confirmed received (nothing changes, we are ahead of it)
-	gpaTC.WithInputs(inputAnchorConfirmed(gpaNodes, ao2)).RunAll()
+	inputAnchorConfirmed(gpaNodes, ao2)
+	gpaTC.RunAll()
 	gpaTC.PrintAllStatusStrings("After gpaMsgsAnchor2Recv", t.Logf)
 	for _, n := range gpaNodes {
 		require.NotNil(t, n.Output())
@@ -136,16 +139,13 @@ func testCommitteeLogBasic(t *testing.T, n, f int) {
 ////////////////////////////////////////////////////////////////////////////////
 // Helper functions.
 
-func inputAnchorConfirmed(gpaNodes map[gpa.NodeID]gpa.GPA, ao *isc.StateAnchor) map[gpa.NodeID]gpa.Input {
-	inputs := map[gpa.NodeID]gpa.Input{}
+func inputAnchorConfirmed(gpaNodes map[gpa.NodeID]*committeelog.CommitteeLog, ao *isc.StateAnchor) {
 	for n := range gpaNodes {
-		inputs[n] = committeelog.NewInputAnchorConfirmed(ao)
+		gpaNodes[n].InputAnchorConfirmed(ao)
 	}
-	return inputs
 }
 
-func inputConsensusOutput(consReq map[gpa.NodeID]committeelog.Output, nextAnchor *isc.StateAnchor) map[gpa.NodeID]gpa.Input {
-	inputs := map[gpa.NodeID]gpa.Input{}
+func inputConsensusOutput(gpaNodes map[gpa.NodeID]*committeelog.CommitteeLog, consReq map[gpa.NodeID]committeelog.Output, nextAnchor *isc.StateAnchor) {
 	for nid, outs := range consReq {
 		maxLI := committeelog.NilLogIndex()
 		for li := range outs {
@@ -153,10 +153,9 @@ func inputConsensusOutput(consReq map[gpa.NodeID]committeelog.Output, nextAnchor
 				break
 			}
 			maxLI = li
-			inputs[nid] = committeelog.NewInputConsensusOutputConfirmed(nextAnchor, li)
+			gpaNodes[nid].InputConsensusOutputConfirmed(nextAnchor, li)
 		}
 	}
-	return inputs
 }
 
 func randomAnchorWithID(anchorID iotago.ObjectID, stateAddress *cryptolib.Address, stateIndex uint32) *isc.StateAnchor {

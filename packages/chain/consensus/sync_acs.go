@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/iotaledger/wasp/v2/packages/coin"
-	"github.com/iotaledger/wasp/v2/packages/gpa"
 	"github.com/iotaledger/wasp/v2/packages/gpa/acs"
 	"github.com/iotaledger/wasp/v2/packages/isc"
 	"github.com/iotaledger/wasp/v2/packages/parameters"
@@ -44,77 +43,72 @@ func NewSyncACS(
 	}
 }
 
-func (sub *SyncACS) StateProposalReceived(proposedBaseAnchor *isc.StateAnchor) []gpa.MessageOut {
+func (sub *SyncACS) StateProposalReceived(proposedBaseAnchor *isc.StateAnchor) {
 	if sub.baseStateAnchorReceived {
-		return nil
+		return
 	}
 	sub.baseStateAnchor = proposedBaseAnchor
 	sub.baseStateAnchorReceived = true
-	return sub.tryCompleteInput()
+	sub.tryCompleteInput()
 }
 
-func (sub *SyncACS) MempoolRequestsReceived(requestRefs []*isc.RequestRef) []gpa.MessageOut {
+func (sub *SyncACS) MempoolRequestsReceived(requestRefs []*isc.RequestRef) {
 	if sub.RequestRefs != nil {
-		return nil
+		return
 	}
 	sub.RequestRefs = requestRefs
-	return sub.tryCompleteInput()
+	sub.tryCompleteInput()
 }
 
-func (sub *SyncACS) DistributedSignatureIndexProposalReceived(distSignIndexProposal []int) []gpa.MessageOut {
+func (sub *SyncACS) DistributedSignatureIndexProposalReceived(distSignIndexProposal []int) {
 	if sub.DistributedSignatureIndexProposal != nil {
-		return nil
+		return
 	}
 	sub.DistributedSignatureIndexProposal = distSignIndexProposal
-	return sub.tryCompleteInput()
+	sub.tryCompleteInput()
 }
 
-func (sub *SyncACS) TimeDataReceived(timeData time.Time) []gpa.MessageOut {
+func (sub *SyncACS) TimeDataReceived(timeData time.Time) {
 	if timeData.After(sub.TimeData) {
 		sub.TimeData = timeData
-		return sub.tryCompleteInput()
+		sub.tryCompleteInput()
 	}
-	return nil
 }
 
-func (sub *SyncACS) L1InfoReceived(gasCoins []*coin.CoinWithRef, l1params *parameters.L1Params) []gpa.MessageOut {
+func (sub *SyncACS) L1InfoReceived(gasCoins []*coin.CoinWithRef, l1params *parameters.L1Params) {
 	if sub.l1InfoReceived {
-		return nil
+		return
 	}
 	sub.gasCoins = gasCoins
 	sub.l1params = l1params
 	sub.l1InfoReceived = true
-	return sub.tryCompleteInput()
+	sub.tryCompleteInput()
 }
 
-func (sub *SyncACS) tryCompleteInput() []gpa.MessageOut {
+func (sub *SyncACS) tryCompleteInput() {
 	if sub.inputsReady || !sub.baseStateAnchorReceived {
-		return nil
+		return
 	}
 	if sub.RequestRefs == nil || sub.DistributedSignatureIndexProposal == nil || sub.TimeData.IsZero() || !sub.l1InfoReceived {
-		return nil
+		return
 	}
 	sub.inputsReady = true
-	return sub.c.uponACSInputsReceived(sub.baseStateAnchor, sub.RequestRefs, sub.DistributedSignatureIndexProposal, sub.TimeData, sub.gasCoins, sub.l1params)
+	sub.c.uponACSInputsReceived(sub.baseStateAnchor, sub.RequestRefs, sub.DistributedSignatureIndexProposal, sub.TimeData, sub.gasCoins, sub.l1params)
 }
 
-func (sub *SyncACS) ACSOutputReceived(output gpa.Output) []gpa.MessageOut {
-	if output == nil {
-		return nil
-	}
-	acsOutput, ok := output.(*acs.Output)
-	if !ok {
-		panic(fmt.Errorf("acs returned unexpected output: %v", output))
+func (sub *SyncACS) ACSOutputReceived(acsOutput *acs.Output) {
+	if acsOutput == nil {
+		return
 	}
 	if !sub.terminated && acsOutput.Terminated {
 		sub.terminated = true
 		sub.c.uponACSTerminated()
 	}
 	if sub.outputReady {
-		return nil
+		return
 	}
 	sub.outputReady = true
-	return sub.c.uponACSOutputReceived(acsOutput.Values)
+	sub.c.uponACSOutputReceived(acsOutput.Values)
 }
 
 // String tries to provide useful human-readable compact status.

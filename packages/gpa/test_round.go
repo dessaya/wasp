@@ -14,48 +14,46 @@ const (
 
 // A protocol for testing infrastructure.
 // A peer outputs true when it receives a message from each peer.
-type testRound struct {
+type TestRound struct {
 	me       NodeID
+	out      OutBuffer
 	nodeIDs  []NodeID
 	received map[NodeID]bool
 }
 
-var _ GPA = &testRound{}
+var _ GPA = &TestRound{}
 
-func NewTestRound(nodeIDs []NodeID, me NodeID) GPA {
-	return NewOwnHandler(me, &testRound{me: me, nodeIDs: nodeIDs, received: map[NodeID]bool{}})
+func NewTestRound(nodeIDs []NodeID, me NodeID) *TestRound {
+	return &TestRound{me: me, nodeIDs: nodeIDs, received: map[NodeID]bool{}}
 }
 
-func (tr *testRound) Input(input Input) []MessageOut {
-	msgs := make([]MessageOut, len(tr.nodeIDs))
-	for i := range msgs {
-		msgs[i] = NewMessageOut(tr.nodeIDs[i], &testRoundMsg{})
+func (tr *TestRound) SwapOutBuffer() []MessageOut {
+	return tr.out.Swap()
+}
+
+func (tr *TestRound) MakeRound() {
+	for _, nid := range tr.nodeIDs {
+		tr.out.Put(NewMessageOut(nid, &testRoundMsg{}))
 	}
-	return msgs
 }
 
-func (tr *testRound) Message(msg MessageIn) []MessageOut {
+func (tr *TestRound) Message(msg MessageIn) {
 	from := msg.Sender
 	if tr.received[from] {
 		panic(errors.New("duplicate message"))
 	}
 	tr.received[from] = true
-	return nil
 }
 
-func (tr *testRound) Output() Output {
-	if len(tr.received) == len(tr.nodeIDs) {
-		output := true
-		return &output
-	}
-	return nil
+func (tr *TestRound) Output() bool {
+	return len(tr.received) == len(tr.nodeIDs)
 }
 
-func (tr *testRound) StatusString() string {
-	return fmt.Sprintf("{testRound, received=%v}", tr.received)
+func (tr *TestRound) StatusString() string {
+	return fmt.Sprintf("{TestRound, received=%v}", tr.received)
 }
 
-func (tr *testRound) UnmarshalPayload(data []byte) (MessagePayload, error) {
+func (tr *TestRound) UnmarshalPayload(data []byte) (MessagePayload, error) {
 	return UnmarshalPayload(data, PayloadAllocator{
 		msgTypeTestRound: func() MessagePayload { return &testRoundMsg{} },
 	})
@@ -67,4 +65,8 @@ var _ MessagePayload = new(testRoundMsg)
 
 func (msg *testRoundMsg) MsgType() MessageType {
 	return msgTypeTestRound
+}
+
+func (msg *testRoundMsg) String() string {
+	return "{testRoundMsg}"
 }

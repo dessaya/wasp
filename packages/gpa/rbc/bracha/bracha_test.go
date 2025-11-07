@@ -21,15 +21,14 @@ func TestBasic(t *testing.T) {
 		nodeIDs := gpa.MakeTestNodeIDs(n)
 		leader := nodeIDs[rand.Intn(len(nodeIDs))]
 		input := []byte("something important to broadcast")
-		nodes := map[gpa.NodeID]gpa.GPA{}
+		nodes := map[gpa.NodeID]*bracha.RBC{}
 		for _, nid := range nodeIDs {
 			nodes[nid] = bracha.New(nodeIDs, f, nid, leader, math.MaxInt, func(b []byte) bool { return true }, gpa.NewPanicLogger())
 		}
-		gpa.NewTestContext(nodes).WithInputs(map[gpa.NodeID]gpa.Input{leader: gpa.Input(input)}).RunAll()
+		nodes[leader].Input(input)
+		gpa.NewTestContext(nodes).RunAll()
 		for _, n := range nodes {
-			o := n.Output()
-			require.NotNil(tt, o)
-			require.Equal(tt, o.([]byte), input)
+			require.Equal(tt, n.Output(), input)
 		}
 	}
 	t.Run("n=1,f=0", func(tt *testing.T) { test(tt, 1, 0) })
@@ -58,11 +57,10 @@ func TestWithSilent(t *testing.T) {
 		for _, nid := range faulty {
 			nodes[nid] = gpa.MakeTestSilentNode()
 		}
-		gpa.NewTestContext(nodes).WithInputs(map[gpa.NodeID]gpa.Input{leader: gpa.Input(input)}).RunAll()
+		nodes[leader].(*bracha.RBC).Input(input)
+		gpa.NewTestContext(nodes).RunAll()
 		for _, nid := range fair {
-			o := nodes[nid].Output()
-			require.NotNil(tt, o)
-			require.Equal(tt, o.([]byte), input)
+			require.Equal(tt, nodes[nid].(*bracha.RBC).Output(), input)
 		}
 	}
 	t.Run("n=1,f=0", func(tt *testing.T) { test(tt, 1, 0) })
@@ -81,14 +79,14 @@ func TestPredicate(t *testing.T) {
 		nodeIDs := gpa.MakeTestNodeIDs(n)
 		leader := nodeIDs[rand.Intn(len(nodeIDs))]
 		input := []byte("something important to broadcast")
-		nodes := map[gpa.NodeID]gpa.GPA{}
+		nodes := map[gpa.NodeID]*bracha.RBC{}
 		for _, nid := range nodeIDs {
 			nodes[nid] = bracha.New(nodeIDs, f, nid, leader, math.MaxInt, pFalse, gpa.NewPanicLogger()) // NOTE: Initially false.
 		}
 		//
 		// No outputs are returned while predicates are false.
-		tc := gpa.NewTestContext(nodes).WithInputs(map[gpa.NodeID]gpa.Input{leader: gpa.Input(input)})
-		tc.RunAll()
+		nodes[leader].Input(input)
+		gpa.NewTestContext(nodes).RunAll()
 		for nid := range nodes {
 			require.Nil(tt, nodes[nid].Output())
 		}

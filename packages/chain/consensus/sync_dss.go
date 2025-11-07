@@ -5,7 +5,6 @@ package consensus
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/iotaledger/wasp/v2/packages/chain/distsign"
@@ -26,53 +25,50 @@ func NewSyncDistributedSignature(c *Consensus) *SyncDistributedSignature {
 	return &SyncDistributedSignature{c: c}
 }
 
-func (sub *SyncDistributedSignature) InitialInputReceived() []gpa.MessageOut {
+func (sub *SyncDistributedSignature) InitialInputReceived() {
 	if sub.initialInputsReady {
-		return nil
+		return
 	}
 	sub.initialInputsReady = true
-	return sub.c.uponDistributedSignatureInitialInputsReady()
+	sub.c.uponDistributedSignatureInitialInputsReady()
 }
 
-func (sub *SyncDistributedSignature) DistributedSignatureReady(output gpa.Output) []gpa.MessageOut {
-	if output == nil || (sub.indexProposalReady && sub.outputReady) {
-		return nil
+func (sub *SyncDistributedSignature) DistributedSignatureReady(distSignOutput *distsign.Output) {
+	if distSignOutput == nil || (sub.indexProposalReady && sub.outputReady) {
+		return
 	}
-	var msgs []gpa.MessageOut
-	distSignOutput := output.(*distsign.Output)
 	if !sub.indexProposalReady && distSignOutput.ProposedIndexes != nil {
 		sub.indexProposalReady = true
-		msgs = slices.Concat(msgs, sub.c.uponDistributedSignatureIndexProposalReady(distSignOutput.ProposedIndexes))
+		sub.c.uponDistributedSignatureIndexProposalReady(distSignOutput.ProposedIndexes)
 	}
 	if !sub.outputReady && distSignOutput.Signature != nil {
 		sub.outputReady = true
-		msgs = slices.Concat(msgs, sub.c.uponDistributedSignatureOutputReady(distSignOutput.Signature))
+		sub.c.uponDistributedSignatureOutputReady(distSignOutput.Signature)
 	}
-	return msgs
 }
 
-func (sub *SyncDistributedSignature) DecidedIndexProposalsReceived(decidedIndexProposals map[gpa.NodeID][]int) []gpa.MessageOut {
+func (sub *SyncDistributedSignature) DecidedIndexProposalsReceived(decidedIndexProposals map[gpa.NodeID][]int) {
 	if sub.DecidedIndexProposals != nil || decidedIndexProposals == nil {
-		return nil
+		return
 	}
 	sub.DecidedIndexProposals = decidedIndexProposals
-	return sub.tryCompleteSigning()
+	sub.tryCompleteSigning()
 }
 
-func (sub *SyncDistributedSignature) MessageToSignReceived(messageToSign []byte) []gpa.MessageOut {
+func (sub *SyncDistributedSignature) MessageToSignReceived(messageToSign []byte) {
 	if sub.MessageToSign != nil || messageToSign == nil {
-		return nil
+		return
 	}
 	sub.MessageToSign = messageToSign
-	return sub.tryCompleteSigning()
+	sub.tryCompleteSigning()
 }
 
-func (sub *SyncDistributedSignature) tryCompleteSigning() []gpa.MessageOut {
+func (sub *SyncDistributedSignature) tryCompleteSigning() {
 	if sub.signingInputsReady || sub.MessageToSign == nil || sub.DecidedIndexProposals == nil {
-		return nil
+		return
 	}
 	sub.signingInputsReady = true
-	return sub.c.uponDistributedSignatureSigningInputsReceived(sub.DecidedIndexProposals, sub.MessageToSign)
+	sub.c.uponDistributedSignatureSigningInputsReceived(sub.DecidedIndexProposals, sub.MessageToSign)
 }
 
 // String tries to provide useful human-readable compact status.

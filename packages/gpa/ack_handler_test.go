@@ -17,39 +17,32 @@ func TestAckHandler(t *testing.T) {
 	t.Parallel()
 	n := 10
 	nodeIDs := MakeTestNodeIDs(n)
-	nodesAH := map[NodeID]AckHandler{}
-	nodes := map[NodeID]GPA{}
-	inputs := map[NodeID]Input{}
+	nodes := map[NodeID]AckHandler[*TestRound]{}
 	for _, nid := range nodeIDs {
-		nodesAH[nid] = NewAckHandler(nid, NewTestRound(nodeIDs, nid), 10*time.Millisecond)
-		nodes[nid] = nodesAH[nid]
-		inputs[nid] = nil
+		nodes[nid] = NewAckHandler(nid, NewTestRound(nodeIDs, nid), 10*time.Millisecond)
 	}
 	tc := NewTestContext(nodes).
-		WithInputs(inputs).
-		WithInputProbability(0.5).
 		WithMessageDeliveryProbability(0.5) // NOTE: The AckHandler has to compensate this.
 	tc.RunAll()
 	//
 	// Tick the timer until all the messages are delivered.
+
+	for _, nid := range nodeIDs {
+		nodes[nid].Nested().MakeRound()
+	}
 	for {
-		allCompleted := true
-		for _, n := range nodes {
-			if n.Output() == nil {
-				allCompleted = false
-				break
-			}
-		}
+		allCompleted := lo.EveryBy(lo.Values(nodes), func(node AckHandler[*TestRound]) bool {
+			return node.Nested().Output()
+		})
 		if allCompleted {
-			for _, n := range nodes {
-				require.True(t, *n.Output().(*bool))
-			}
 			break
 		}
+
 		timestamp := time.Now()
 		for _, nid := range nodeIDs {
-			tc.WithInput(nid, nodesAH[nid].MakeTickInput(timestamp))
+			nodes[nid].Tick(timestamp)
 		}
+
 		tc.RunAll()
 	}
 }

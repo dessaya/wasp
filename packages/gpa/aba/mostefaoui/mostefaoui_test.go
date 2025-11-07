@@ -11,6 +11,7 @@ import (
 
 	"github.com/iotaledger/wasp/v2/packages/gpa"
 	"github.com/iotaledger/wasp/v2/packages/gpa/aba/mostefaoui"
+	"github.com/iotaledger/wasp/v2/packages/gpa/cc"
 	"github.com/iotaledger/wasp/v2/packages/gpa/cc/blssig"
 	"github.com/iotaledger/wasp/v2/packages/gpa/cc/semi"
 	"github.com/iotaledger/wasp/v2/packages/tcrypto"
@@ -61,42 +62,39 @@ func testBasic(t *testing.T, n, f int, inpType string, silent int) {
 		} else {
 			nodeLog := log.NewChildLogger(nid.ShortString())
 			ii := i
-			makeCCInst := func(round int) gpa.GPA {
+			makeCCInst := func(round int) cc.CommonCoin {
 				realCC := blssig.New(
 					suite, nodeIDs, commits, priShares[ii], threshold,
 					nodeIDs[ii], []byte{1, 2, 3, byte(round)}, nodeLog,
 				)
 				return semi.New(round, realCC)
 			}
-			nodes[nid] = mostefaoui.New(nodeIDs, nid, f, makeCCInst, nodeLog).AsGPA()
+			aba := mostefaoui.New(nodeIDs, nid, f, makeCCInst, nodeLog)
+			nodes[nid] = aba
+			var input bool
+			switch inpType {
+			case "rand":
+				input = rand.Int()%2 == 1
+			case "true":
+				input = true
+			case "false":
+				input = false
+			default:
+				t.Fatal("unexpected input type")
+			}
+			aba.Input(input)
 		}
 	}
 	tc := gpa.NewTestContext(nodes)
-	//
-	// Choose inputs.
-	inputs := map[gpa.NodeID]gpa.Input{}
-	for _, nid := range nodeIDs {
-		switch inpType {
-		case "rand":
-			inputs[nid] = rand.Int()%2 == 1
-		case "true":
-			inputs[nid] = true
-		case "false":
-			inputs[nid] = false
-		default:
-			t.Fatal("unexpected input type")
-		}
-	}
-	t.Logf("Inputs: %v", inputs)
-	tc.WithInputs(inputs).RunAll()
+	tc.RunAll()
 	tc.PrintAllStatusStrings("Done,", t.Logf)
 	//
-	out0 := nodes[nodeIDs[0]].Output().(*mostefaoui.Output)
+	out0 := nodes[nodeIDs[0]].(*mostefaoui.ABA).Output()
 	for i, nid := range nodeIDs {
 		if i >= n-silent {
 			continue
 		}
-		out := nodes[nid].Output().(*mostefaoui.Output)
+		out := nodes[nid].(*mostefaoui.ABA).Output()
 		require.NotNil(t, out)
 		require.True(t, out.Terminated)
 		switch inpType {

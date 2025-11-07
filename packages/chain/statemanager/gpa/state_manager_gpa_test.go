@@ -65,28 +65,35 @@ func TestManyNodes(t *testing.T) {
 	// Nodes are checked in parallel
 	lastCommitment = blocks[15].L1Commitment()
 	lastOutput := env.bf.GetAnchor(lastCommitment)
-	cspInputs := make(map[gpa.NodeID]gpa.Input)
+
+	// state proposal
 	cspRespChans := make(map[gpa.NodeID]<-chan interface{})
 	for i := 1; i < len(nodeIDs); i++ {
 		nodeID := nodeIDs[i]
-		cspInputs[nodeID], cspRespChans[nodeID] = inputs.NewConsensusStateProposal(context.Background(), lastOutput)
+		var input *inputs.ConsensusStateProposal
+		input, cspRespChans[nodeID] = inputs.NewConsensusStateProposal(context.Background(), lastOutput)
+		env.sms[nodeID].InputConsensusStateProposal(input)
 	}
-	env.tc.WithInputs(cspInputs).RunAll()
+	env.tc.RunAll()
 	for nodeID, cspRespChan := range cspRespChans {
 		env.t.Logf("Parallel: waiting for blocks ending with %s to be available on node %s...", lastCommitment, nodeID.ShortString())
 		require.True(env.t, env.ensureCompletedConsensusStateProposal(cspRespChan, 10, smParameters.StateManagerGetBlockRetry))
 	}
-	cdsInputs := make(map[gpa.NodeID]gpa.Input)
+
+	// decided state
 	cdsRespChans := make(map[gpa.NodeID]<-chan state.State)
 	for i := 1; i < len(nodeIDs); i++ {
 		nodeID := nodeIDs[i]
-		cdsInputs[nodeID], cdsRespChans[nodeID] = inputs.NewConsensusDecidedState(context.Background(), lastOutput)
+		var input *inputs.ConsensusDecidedState
+		input, cdsRespChans[nodeID] = inputs.NewConsensusDecidedState(context.Background(), lastOutput)
+		env.sms[nodeID].InputConsensusDecidedState(input)
 	}
-	env.tc.WithInputs(cdsInputs).RunAll()
+	env.tc.RunAll()
 	for nodeID, cdsRespChan := range cdsRespChans {
 		env.t.Logf("Parallel: waiting for state %s on node %s", lastCommitment, nodeID.ShortString())
 		require.True(env.t, env.ensureCompletedConsensusDecidedState(cdsRespChan, lastCommitment, 16, smParameters.StateManagerGetBlockRetry))
 	}
+
 	for _, nodeID := range nodeIDs {
 		env.t.Logf("Parallel: waiting for blocks to be available in store on node %s", nodeID.ShortString())
 		require.True(env.t, env.ensureStoreContainsBlocksNoWait(nodeID, blocks[8:]))
@@ -404,13 +411,13 @@ func TestPruningMany(t *testing.T) {
 
 	sm, ok := env.sms[nodeID]
 	require.True(env.t, ok)
-	sm.(*stateManagerGPA).parameters.PruningMinStatesToKeep = 10000
+	sm.parameters.PruningMinStatesToKeep = 10000
 
 	blocks := env.bf.GetBlocks(blocksToSend+1, 1)
 	env.sendBlocksToNode(nodeID, 0*time.Second, blocks[:blocksToSend]...)
 	require.True(env.t, env.ensureStoreContainsBlocksNoWait(nodeID, blocks[:blocksToSend]))
 
-	sm.(*stateManagerGPA).parameters.PruningMinStatesToKeep = blocksToKeep
+	sm.parameters.PruningMinStatesToKeep = blocksToKeep
 	env.sendBlocksToNode(nodeID, 0*time.Second, blocks[blocksToSend])
 	lastExistingBlockIndex := blocksToSend - blocksToKeep
 	require.True(env.t, env.ensureStoreContainsBlocksNoWait(nodeID, blocks[lastExistingBlockIndex:]))
@@ -445,13 +452,13 @@ func TestPruningTooMuch(t *testing.T) {
 
 	sm, ok := env.sms[nodeID]
 	require.True(env.t, ok)
-	sm.(*stateManagerGPA).parameters.PruningMinStatesToKeep = 10000
+	sm.parameters.PruningMinStatesToKeep = 10000
 
 	blocks := env.bf.GetBlocks(blocksToSend, 1)
 	env.sendBlocksToNode(nodeID, 0*time.Second, blocks...)
 	require.True(env.t, env.ensureStoreContainsBlocksNoWait(nodeID, blocks))
 
-	sm.(*stateManagerGPA).parameters.PruningMinStatesToKeep = blocksToKeep
+	sm.parameters.PruningMinStatesToKeep = blocksToKeep
 	lastExistingBlockIndex := -1 // Origin block is not in blocks array
 	lastExistingBlockIndexExpected := blocksToSend - blocksToKeep - 1
 	for lastExistingBlockIndex < lastExistingBlockIndexExpected {
@@ -548,7 +555,7 @@ func TestBlockCacheCleaningAuto(t *testing.T) {
 	nodeID := nodeIDs[0]
 	blocks := env.bf.GetBlocks(6, 2)
 
-	blockCache := env.sms[nodeID].(*stateManagerGPA).blockCache
+	blockCache := env.sms[nodeID].blockCache
 	blockCache.AddBlock(blocks[0])
 	blockCache.AddBlock(blocks[1])
 	require.NotNil(env.t, blockCache.GetBlock(blocks[0].L1Commitment()))

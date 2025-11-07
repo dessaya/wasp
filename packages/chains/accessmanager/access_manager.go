@@ -21,7 +21,7 @@ import (
 )
 
 type AccessMgr struct {
-	dist                    gpa.AckHandler
+	dist                    gpa.AckHandler[*dist.AccessMgrDist]
 	dismissPeerBuf          []*cryptolib.PublicKey
 	reqTrustedNodesPipe     pipe.Pipe[*reqTrustedNodes]
 	reqChainAccessNodesPipe pipe.Pipe[*reqChainAccessNodes]
@@ -77,10 +77,11 @@ func New(
 		log:                     log,
 	}
 	me := ami.pubKeyAsNodeID(nodeIdentity.GetPublicKey())
-	ami.dist = gpa.NewAckHandler(me, gpa.NewOwnHandler(
+	ami.dist = gpa.NewAckHandler(
 		me,
-		dist.NewAccessMgr(ami.pubKeyAsNodeID, serversUpdatedCB, ami.dismissPeerCB, log).AsGPA(),
-	), resendPeriod)
+		dist.NewAccessMgr(ami.pubKeyAsNodeID, serversUpdatedCB, ami.dismissPeerCB, log),
+		resendPeriod,
+	)
 
 	netRecvPipeInCh := ami.netRecvPipe.In()
 	unhook := net.Attach(&netPeeringID, peering.ReceiverAccessMgr, func(recv *peering.PeerMessageIn) {
@@ -167,17 +168,20 @@ func (ami *AccessMgr) run(ctx context.Context, cleanupFunc context.CancelFunc) {
 
 func (ami *AccessMgr) handleReqTrustedNodes(recv *reqTrustedNodes) {
 	ami.log.LogDebugf("handleReqTrustedNodes: trusted=%v", recv.trusted)
-	ami.sendMessages(ami.dist.Input(dist.NewInputTrustedNodes(recv.trusted)))
+	ami.dist.Nested().UpdateTrustedNodes(recv.trusted)
+	ami.sendMessages(ami.dist.SwapOutBuffer())
 }
 
 func (ami *AccessMgr) handleReqChainAccessNodes(recv *reqChainAccessNodes) {
 	ami.log.LogDebugf("handleReqChainAccessNodes: chainID=%v, access=%v", recv.chainID, recv.accessNodes)
-	ami.sendMessages(ami.dist.Input(dist.NewInputAccessNodes(recv.chainID, recv.accessNodes)))
+	ami.dist.Nested().UpdateAccessNodes(recv.chainID, recv.accessNodes)
+	ami.sendMessages(ami.dist.SwapOutBuffer())
 }
 
 func (ami *AccessMgr) handleReqChainDismissed(recv *reqChainDismissed) {
 	ami.log.LogDebugf("handleReqChainDismissed: chainID=%v", recv.chainID)
-	ami.sendMessages(ami.dist.Input(dist.NewInputChainDisabled(recv.chainID)))
+	ami.dist.Nested().DisableChain(recv.chainID)
+	ami.sendMessages(ami.dist.SwapOutBuffer())
 }
 
 func (ami *AccessMgr) handleDistDebugTick() {
@@ -188,7 +192,8 @@ func (ami *AccessMgr) handleDistDebugTick() {
 }
 
 func (ami *AccessMgr) handleDistTimeTick(timestamp time.Time) {
-	ami.sendMessages(ami.dist.Input(ami.dist.MakeTickInput(timestamp)))
+	ami.dist.Tick(timestamp)
+	ami.sendMessages(ami.dist.SwapOutBuffer())
 }
 
 func (ami *AccessMgr) handleNetMessage(recv *peering.PeerMessageIn) {
@@ -198,8 +203,8 @@ func (ami *AccessMgr) handleNetMessage(recv *peering.PeerMessageIn) {
 		return
 	}
 	// Output is handled via callbacks in this case.
-	outMsgs := ami.dist.Message(gpa.NewMessageIn(ami.pubKeyAsNodeID(recv.SenderPubKey), msg))
-	ami.sendMessages(outMsgs)
+	ami.dist.Message(gpa.NewMessageIn(ami.pubKeyAsNodeID(recv.SenderPubKey), msg))
+	ami.sendMessages(ami.dist.SwapOutBuffer())
 }
 
 func (ami *AccessMgr) sendMessages(outMsgs []gpa.MessageOut) {

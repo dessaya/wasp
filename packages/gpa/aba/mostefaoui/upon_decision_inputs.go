@@ -5,8 +5,6 @@ package mostefaoui
 
 import (
 	"fmt"
-
-	"github.com/iotaledger/wasp/v2/packages/gpa"
 )
 
 // This object implements a synchronization before the decision.
@@ -21,15 +19,15 @@ import (
 // >           arrival of either an AUX_r or a BVAL_r message)
 // >         ∗ s ← Coin_r.GetCoin()
 type uponDecisionInputs struct {
+	aba        *ABA
 	ccReceived bool
 	ccValue    bool
 	auxVals    []bool
 	done       bool
-	doneCB     func(cc bool, auxVals []bool) []gpa.MessageOut
 }
 
-func newUponDecisionInputs(doneCB func(cc bool, auxVals []bool) []gpa.MessageOut) *uponDecisionInputs {
-	u := &uponDecisionInputs{doneCB: doneCB}
+func newUponDecisionInputs(aba *ABA) *uponDecisionInputs {
+	u := &uponDecisionInputs{aba: aba}
 	u.startRound()
 	return u
 }
@@ -41,29 +39,29 @@ func (u *uponDecisionInputs) startRound() {
 	u.done = false
 }
 
-func (u *uponDecisionInputs) ccOutputReceived(cc bool) []gpa.MessageOut {
+func (u *uponDecisionInputs) ccOutputReceived(cc bool) {
 	if u.ccReceived {
-		return nil
+		return
 	}
 	u.ccValue = cc
 	u.ccReceived = true
-	return u.tryOutput()
+	u.tryOutput()
 }
 
-func (u *uponDecisionInputs) auxValsReady(auxVals []bool) []gpa.MessageOut {
+func (u *uponDecisionInputs) auxValsReady(auxVals []bool) {
 	if u.auxVals != nil {
-		return nil
+		return
 	}
 	u.auxVals = auxVals
-	return u.tryOutput()
+	u.tryOutput()
 }
 
-func (u *uponDecisionInputs) tryOutput() []gpa.MessageOut {
+func (u *uponDecisionInputs) tryOutput() {
 	if u.done || !u.ccReceived || u.auxVals == nil {
-		return nil
+		return
 	}
 	u.done = true
-	return u.doneCB(u.ccValue, u.auxVals)
+	u.aba.uponDecisionInputsReceived(u.ccValue, u.auxVals)
 }
 
 func (u *uponDecisionInputs) haveCC() bool {

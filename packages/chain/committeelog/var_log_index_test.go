@@ -23,10 +23,7 @@ func TestVarLogIndexV2Basic(t *testing.T) {
 	initLI := committeelog.NilLogIndex().Next()
 	//
 	vliOut := committeelog.NilLogIndex()
-	vli := committeelog.NewVarLogIndex(nodeIDs, n, f, initLI, func(li committeelog.LogIndex) []gpa.MessageOut {
-		vliOut = li
-		return nil
-	}, nil, log)
+	vli := committeelog.NewVarLogIndex(&committeelog.CommitteeLog{}, nodeIDs, n, f, initLI, nil, log)
 	//
 	nextLI := initLI.Next()
 	require.NotEqual(t, nextLI, vliOut)
@@ -50,10 +47,7 @@ func TestVarLogIndexV2Other(t *testing.T) {
 	initLI := committeelog.NilLogIndex().Next()
 	//
 	vliOut := committeelog.NilLogIndex()
-	vli := committeelog.NewVarLogIndex(nodeIDs, n, f, initLI, func(li committeelog.LogIndex) []gpa.MessageOut {
-		vliOut = li
-		return nil
-	}, nil, log)
+	vli := committeelog.NewVarLogIndex(&committeelog.CommitteeLog{}, nodeIDs, n, f, initLI, nil, log)
 	li15 := committeelog.LogIndex(15)
 	li16 := committeelog.LogIndex(16)
 	li18 := committeelog.LogIndex(18)

@@ -4,7 +4,6 @@
 package consensus
 
 import (
-	"github.com/iotaledger/wasp/v2/packages/gpa"
 	"github.com/iotaledger/wasp/v2/packages/isc"
 	"github.com/iotaledger/wasp/v2/packages/state"
 )
@@ -27,62 +26,58 @@ type SyncStateMgr struct {
 	saveProducedBlockDone bool
 }
 
-func NewSyncStateMgr(
-	c *Consensus,
-) *SyncStateMgr {
+func NewSyncStateMgr(c *Consensus) *SyncStateMgr {
 	return &SyncStateMgr{c: c}
 }
 
-func (s *SyncStateMgr) ProposedBaseAnchorReceived(baseAnchor *isc.StateAnchor) []gpa.MessageOut {
+func (s *SyncStateMgr) ProposedBaseAnchorReceived(baseAnchor *isc.StateAnchor) {
 	if s.proposedBaseAnchorReceived {
-		return nil
+		return
 	}
 	s.proposedBaseAnchor = baseAnchor
 	s.proposedBaseAnchorReceived = true
-	return s.c.uponStateMgrStateProposalQueryInputsReady(s.proposedBaseAnchor)
+	s.c.uponStateMgrStateProposalQueryInputsReady(s.proposedBaseAnchor)
 }
 
-func (s *SyncStateMgr) StateProposalConfirmedByStateMgr() []gpa.MessageOut {
+func (s *SyncStateMgr) StateProposalConfirmedByStateMgr() {
 	if s.stateProposalReceived {
-		return nil
+		return
 	}
 	s.stateProposalReceived = true
-	return s.c.uponStateMgrStateProposalReceived(s.proposedBaseAnchor)
+	s.c.uponStateMgrStateProposalReceived(s.proposedBaseAnchor)
 }
 
-func (s *SyncStateMgr) DecidedVirtualStateNeeded(decidedBaseAnchor *isc.StateAnchor) []gpa.MessageOut {
+func (s *SyncStateMgr) DecidedVirtualStateNeeded(decidedBaseAnchor *isc.StateAnchor) {
 	if s.decidedBaseAnchor != nil {
-		return nil
+		return
 	}
 	s.decidedBaseAnchor = decidedBaseAnchor
-	return s.c.uponStateMgrDecidedStateQueryInputsReady(s.decidedBaseAnchor)
+	s.c.uponStateMgrDecidedStateQueryInputsReady(s.decidedBaseAnchor)
 }
 
-func (s *SyncStateMgr) DecidedVirtualStateReceived(
-	chainState state.State,
-) []gpa.MessageOut {
+func (s *SyncStateMgr) DecidedVirtualStateReceived(chainState state.State) {
 	if s.decidedStateReceived {
-		return nil
+		return
 	}
 	s.decidedStateReceived = true
-	return s.c.uponStateMgrDecidedStateReceived(chainState)
+	s.c.uponStateMgrDecidedStateReceived(chainState)
 }
 
-func (s *SyncStateMgr) BlockProduced(block state.StateDraft) []gpa.MessageOut {
+func (s *SyncStateMgr) BlockProduced(block state.StateDraft) {
 	if s.producedBlockReceived {
-		return nil
+		return
 	}
 	s.producedBlock = block
 	s.producedBlockReceived = true
-	return s.c.uponStateMgrSaveProducedBlockInputsReady(s.producedBlock)
+	s.c.uponStateMgrSaveProducedBlockInputsReady(s.producedBlock)
 }
 
-func (s *SyncStateMgr) BlockSaved(block state.Block) []gpa.MessageOut {
+func (s *SyncStateMgr) BlockSaved(block state.Block) {
 	if s.saveProducedBlockDone {
-		return nil
+		return
 	}
 	s.saveProducedBlockDone = true
-	return s.c.uponStateMgrSaveProducedBlockDone(block)
+	s.c.uponStateMgrSaveProducedBlockDone(block)
 }
 
 // String tries to provide useful human-readable compact status.

@@ -3,7 +3,6 @@ package inputs
 import (
 	"context"
 
-	"github.com/iotaledger/wasp/v2/packages/gpa"
 	"github.com/iotaledger/wasp/v2/packages/isc"
 	"github.com/iotaledger/wasp/v2/packages/state"
 	"github.com/iotaledger/wasp/v2/packages/transaction"
@@ -15,8 +14,6 @@ type ConsensusDecidedState struct {
 	l1Commitment *state.L1Commitment
 	resultCh     chan<- state.State
 }
-
-var _ gpa.Input = &ConsensusDecidedState{}
 
 func NewConsensusDecidedState(ctx context.Context, anchor *isc.StateAnchor) (*ConsensusDecidedState, <-chan state.State) {
 	commitment, err := transaction.L1CommitmentFromAnchor(anchor)

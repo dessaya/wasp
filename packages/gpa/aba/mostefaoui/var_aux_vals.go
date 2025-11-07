@@ -5,7 +5,6 @@ package mostefaoui
 
 import (
 	"fmt"
-	"slices"
 
 	"github.com/iotaledger/wasp/v2/packages/gpa"
 )
@@ -21,30 +20,23 @@ import (
 //
 // For this we have to get updates to the binValues variable and exchange the AUX messages.
 type varAuxVals struct {
-	n         int
-	f         int
-	nodeIDs   []gpa.NodeID
+	aba       *ABA
 	recv      map[gpa.NodeID]bool
-	readyCB   func(auxVals []bool) []gpa.MessageOut
 	ready     bool
 	round     int
 	sent      bool
 	binValues []bool
 }
 
-func newAuxVals(nodeIDs []gpa.NodeID, f int, readyCB func(auxVals []bool) []gpa.MessageOut) *varAuxVals {
-	v := &varAuxVals{
-		n:         len(nodeIDs),
-		f:         f,
-		nodeIDs:   nodeIDs,
+func newAuxVals(aba *ABA) *varAuxVals {
+	return &varAuxVals{
+		aba:       aba,
 		recv:      map[gpa.NodeID]bool{},
-		readyCB:   readyCB,
 		ready:     false,
 		round:     -1,
 		sent:      false,
 		binValues: nil,
 	}
-	return v
 }
 
 func (v *varAuxVals) startRound(round int) {
@@ -62,24 +54,23 @@ func (v *varAuxVals) startRound(round int) {
 // >           bin_values_r may continue to change as BVAL_r messages
 // >           are received, thus this condition may be triggered upon
 // >           arrival of either an AUX_r or a BVAL_r message)
-func (v *varAuxVals) binValuesUpdated(binValues []bool) []gpa.MessageOut {
-	var msgs []gpa.MessageOut
+func (v *varAuxVals) binValuesUpdated(binValues []bool) {
 	if len(binValues) == 1 {
-		msgs = slices.Concat(msgs, v.multicast(binValues[0]))
+		v.multicast(binValues[0])
 	}
 	v.binValues = binValues
-	return slices.Concat(msgs, v.tryOutput())
+	v.tryOutput()
 }
 
 // >         ∗ wait until at least (N − f) AUX_r messages have been
 // >           received, such that the set of values carried by these
 // >           messages, vals are a subset of bin_values_r ...
-func (v *varAuxVals) msgVoteAUXReceived(msg gpa.TypedMessageIn[*msgVote]) []gpa.MessageOut {
+func (v *varAuxVals) msgVoteAUXReceived(msg gpa.TypedMessageIn[*msgVote]) {
 	if _, ok := v.recv[msg.Sender]; ok {
-		return nil // Duplicate.
+		return // Duplicate.
 	}
 	v.recv[msg.Sender] = msg.Payload.value
-	return v.tryOutput()
+	v.tryOutput()
 }
 
 // >         ∗ wait until at least (N − f) AUX_r messages have been
@@ -88,9 +79,9 @@ func (v *varAuxVals) msgVoteAUXReceived(msg gpa.TypedMessageIn[*msgVote]) []gpa.
 // >           bin_values_r may continue to change as BVAL_r messages
 // >           are received, thus this condition may be triggered upon
 // >           arrival of either an AUX_r or a BVAL_r message)
-func (v *varAuxVals) tryOutput() []gpa.MessageOut {
-	if v.ready || len(v.recv) < v.n-v.f || v.binValues == nil {
-		return nil
+func (v *varAuxVals) tryOutput() {
+	if v.ready || len(v.recv) < v.aba.n-v.aba.f || v.binValues == nil {
+		return
 	}
 	hasBinValsT := false
 	hasBinValsF := false
@@ -115,7 +106,7 @@ func (v *varAuxVals) tryOutput() []gpa.MessageOut {
 			count++
 		}
 	}
-	if count >= v.n-v.f {
+	if count >= v.aba.n-v.aba.f {
 		auxVals := make([]bool, 0, 2)
 		if hasAuxValsT {
 			auxVals = append(auxVals, true)
@@ -124,19 +115,18 @@ func (v *varAuxVals) tryOutput() []gpa.MessageOut {
 			auxVals = append(auxVals, false)
 		}
 		v.ready = true
-		return v.readyCB(auxVals)
+		v.aba.uponAuxValsReady(auxVals)
 	}
-	return nil
 }
 
-func (v *varAuxVals) multicast(value bool) []gpa.MessageOut {
+func (v *varAuxVals) multicast(value bool) {
 	if v.sent {
-		return nil
+		return
 	}
 	v.sent = true
-	return multicastMsgVote(v.nodeIDs, v.round, AUX, value)
+	v.aba.out.PutAll(multicastMsgVote(v.aba.nodeIDs, v.round, AUX, value))
 }
 
 func (v *varAuxVals) statusString() string {
-	return fmt.Sprintf("AUX(N=%v,recv=%v)", len(v.nodeIDs), len(v.recv))
+	return fmt.Sprintf("AUX(N=%v,recv=%v)", v.aba.n, len(v.recv))
 }

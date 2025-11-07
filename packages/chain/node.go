@@ -141,7 +141,7 @@ type chainNodeImpl struct {
 	me                  gpa.NodeID
 	nodeIdentity        *cryptolib.KeyPair
 	chainID             isc.ChainID
-	chainMgr            gpa.AckHandler
+	chainMgr            gpa.AckHandler[*chainmanager.ChainMgr]
 	chainStore          indexedstore.IndexedStore
 	nodeConn            NodeConnection
 	tangleTime          time.Time
@@ -509,9 +509,11 @@ func (cni *chainNodeImpl) run(ctx context.Context, cleanupFunc context.CancelFun
 				cni.stateTrackerCnf.ChainNodeStateMgrResponse(resp)
 			}
 		case <-consensusDelayTicker.C:
-			cni.sendMessages(cni.chainMgr.Input(chainmanager.NewInputCanPropose()))
+			cni.chainMgr.Nested().InputCanPropose()
+			cni.sendMessages()
 		case t := <-redeliveryPeriodTicker.C:
-			cni.sendMessages(cni.chainMgr.Input(cni.chainMgr.MakeTickInput(t)))
+			cni.chainMgr.Tick(t)
+			cni.sendMessages()
 		case <-ctx.Done():
 			continue
 		}
@@ -609,10 +611,14 @@ func (cni *chainNodeImpl) handleTxPublished(txPubResult *txPublished) {
 	}
 	cni.publishingTXes.Delete(txPubResult.txID.HashValue())
 
-	outMsgs := cni.chainMgr.Input(
-		chainmanager.NewInputChainTxPublishResult(txPubResult.committeeAddr, txPubResult.logIndex, txPubResult.txID, txPubResult.nextAnchor, txPubResult.confirmed),
+	cni.chainMgr.Nested().InputChainTxPublishResult(
+		txPubResult.committeeAddr,
+		txPubResult.logIndex,
+		txPubResult.txID,
+		txPubResult.nextAnchor,
+		txPubResult.confirmed,
 	)
-	cni.sendMessages(outMsgs)
+	cni.sendMessages()
 }
 
 func (cni *chainNodeImpl) handleStateAnchor(stateAchor *isc.StateAnchor, l1Params *parameters.L1Params) {
@@ -641,10 +647,8 @@ func (cni *chainNodeImpl) handleStateAnchor(stateAchor *isc.StateAnchor, l1Param
 	cni.latestActiveAnchor = stateAchor
 	cni.accessLock.Unlock()
 
-	outMsgs := cni.chainMgr.Input(
-		chainmanager.NewInputAnchorConfirmed(stateAchor.Owner(), stateAchor),
-	)
-	cni.sendMessages(outMsgs)
+	cni.chainMgr.Nested().InputAnchorConfirmed(stateAchor.Owner(), stateAchor)
+	cni.sendMessages()
 }
 
 func (cni *chainNodeImpl) handleMilestoneTimestamp(timestamp time.Time) {
@@ -667,7 +671,8 @@ func (cni *chainNodeImpl) handleNetMessage(recv *peering.PeerMessageIn) {
 		cni.log.LogWarnf("cannot parse message: %v", err)
 		return
 	}
-	cni.sendMessages(cni.chainMgr.Message(gpa.NewMessageIn(cni.pubKeyAsNodeID(recv.SenderPubKey), msg)))
+	cni.chainMgr.Message(gpa.NewMessageIn(cni.pubKeyAsNodeID(recv.SenderPubKey), msg))
+	cni.sendMessages()
 }
 
 func (cni *chainNodeImpl) handleNeedConsensus(ctx context.Context, upd *chainmanager.NeedConsensusMap) {
@@ -730,33 +735,32 @@ func (cni *chainNodeImpl) handleNeedPublishTX(ctx context.Context, upd *chainman
 
 func (cni *chainNodeImpl) handleConsensusOutput(out *consOutput) {
 	cni.log.LogDebugf("handleConsensusOutput, %v", out)
-	var chainMgrInput gpa.Input
 	switch out.output.Status {
 	case consensus.Completed:
-		chainMgrInput = chainmanager.NewInputConsensusOutputDone(
+		cni.chainMgr.Nested().InputConsensusOutputDone(
 			out.request.CommitteeAddr,
 			out.request.LogIndex,
 			out.request.BaseStateAnchor,
 			out.output.Result,
 		)
 	case consensus.Skipped:
-		chainMgrInput = chainmanager.NewInputConsensusOutputSkip(
+		cni.chainMgr.Nested().InputConsensusOutputSkip(
 			out.request.CommitteeAddr,
 			out.request.LogIndex,
 		)
 	default:
 		panic(fmt.Errorf("unexpected output state from consensus: %+v", out))
 	}
-	cni.sendMessages(cni.chainMgr.Input(chainMgrInput))
+	cni.sendMessages()
 }
 
 func (cni *chainNodeImpl) handleConsensusRecover(out *consRecover) {
 	cni.log.LogDebugf("handleConsensusRecover: %v", out)
-	chainMgrInput := chainmanager.NewInputConsensusTimeout(
+	cni.chainMgr.Nested().InputConsensusTimeout(
 		out.request.CommitteeAddr,
 		out.request.LogIndex,
 	)
-	cni.sendMessages(cni.chainMgr.Input(chainMgrInput))
+	cni.sendMessages()
 }
 
 func (cni *chainNodeImpl) ensureConsensusInput(ctx context.Context, needConsensus *chainmanager.NeedConsensus) {
@@ -834,7 +838,8 @@ func (cni *chainNodeImpl) cleanupPublishingTXes(neededPostTXes *shrinkingmap.Shr
 	})
 }
 
-func (cni *chainNodeImpl) sendMessages(outMsgs []gpa.MessageOut) {
+func (cni *chainNodeImpl) sendMessages() {
+	outMsgs := cni.chainMgr.SwapOutBuffer()
 	for _, msg := range outMsgs {
 		recipientPubKey, ok := cni.netPeerPubs[msg.Recipient]
 		if !ok {
@@ -1252,7 +1257,7 @@ func initializeOperationalChain(
 	mempool := createMempool(ctx, chainID, nodeIdentity, net, cni, chainMetrics,
 		mempoolSettings, mempoolBroadcastInterval, nodeConn)
 
-	cni.chainMgr = gpa.NewAckHandler(cni.me, chainMgr.AsGPA(), RedeliveryPeriod)
+	cni.chainMgr = gpa.NewAckHandler(cni.me, chainMgr, RedeliveryPeriod)
 	cni.stateMgr = stateMgr
 	cni.mempool = mempool
 

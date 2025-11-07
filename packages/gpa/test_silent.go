@@ -15,15 +15,10 @@ func MakeTestSilentNode() GPA {
 	return &silentNode{}
 }
 
-func (s *silentNode) Input(input Input) []MessageOut {
-	return nil
+func (s *silentNode) Message(msg MessageIn) {
 }
 
-func (s *silentNode) Message(msg MessageIn) []MessageOut {
-	return nil
-}
-
-func (s *silentNode) Output() Output {
+func (s *silentNode) SwapOutBuffer() []MessageOut {
 	return nil
 }
 

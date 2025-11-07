@@ -29,10 +29,15 @@ func (w *MsgWrapper) WrapMessageOut(subsystem byte, index int, msg MessageOut) M
 	)
 }
 
-func (w *MsgWrapper) WrapMessagesOut(subsystem byte, index int, msgs []MessageOut) []MessageOut {
+func (w *MsgWrapper) WrapMessagesOut(subsystem byte, index int) ([]MessageOut, error) {
+	subGPA, err := w.subsystemFunc(subsystem, index)
+	if err != nil {
+		return nil, err
+	}
+	msgs := subGPA.SwapOutBuffer()
 	return lo.Map(msgs, func(msg MessageOut, _ int) MessageOut {
 		return w.WrapMessageOut(subsystem, index, msg)
-	})
+	}), nil
 }
 
 func (w *MsgWrapper) WrapMessageIn(subsystem byte, index int, msg MessageIn) MessageIn {
@@ -48,21 +53,13 @@ func (w *MsgWrapper) WrapMessagesIn(subsystem byte, index int, msgs []MessageIn)
 	})
 }
 
-func (w *MsgWrapper) DelegateInput(subsystem byte, index int, input Input) (GPA, []MessageOut, error) {
-	sub, err := w.subsystemFunc(subsystem, index)
-	if err != nil {
-		return nil, nil, err
-	}
-	return sub, w.WrapMessagesOut(subsystem, index, sub.Input(input)), nil
-}
-
-func (w *MsgWrapper) DelegateMessage(msg TypedMessageIn[*WrappingMsg]) (GPA, []MessageOut, error) {
+func (w *MsgWrapper) DelegateMessageIn(msg TypedMessageIn[*WrappingMsg]) error {
 	sub, err := w.subsystemFunc(msg.Payload.subsystem, msg.Payload.index)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
-	subOut := sub.Message(NewMessageIn(msg.Sender, msg.Payload.wrapped))
-	return sub, w.WrapMessagesOut(msg.Payload.subsystem, msg.Payload.index, subOut), nil
+	sub.Message(NewMessageIn(msg.Sender, msg.Payload.wrapped))
+	return nil
 }
 
 func (w *MsgWrapper) UnmarshalPayload(data []byte) (MessagePayload, error) {

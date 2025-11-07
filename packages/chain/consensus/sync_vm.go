@@ -5,11 +5,9 @@ package consensus
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/iotaledger/wasp/v2/packages/chain/consensus/batchproposal"
-	"github.com/iotaledger/wasp/v2/packages/gpa"
 	"github.com/iotaledger/wasp/v2/packages/hashing"
 	"github.com/iotaledger/wasp/v2/packages/isc"
 	"github.com/iotaledger/wasp/v2/packages/state"
@@ -33,66 +31,64 @@ func NewSyncVM(
 	return &SyncVM{c: c}
 }
 
-func (sub *SyncVM) DecidedBatchProposalsReceived(aggregatedProposals *batchproposal.AggregatedBatchProposals) []gpa.MessageOut {
+func (sub *SyncVM) DecidedBatchProposalsReceived(aggregatedProposals *batchproposal.AggregatedBatchProposals) {
 	if sub.aggregatedProposals != nil || aggregatedProposals == nil {
-		return nil
+		return
 	}
 	sub.aggregatedProposals = aggregatedProposals
-	return slices.Concat(
-		sub.tryCompleteInputs(),
-		sub.tryCompleteOutputs(),
-	)
+	sub.tryCompleteInputs()
+	sub.tryCompleteOutputs()
 }
 
-func (sub *SyncVM) DecidedStateReceived(chainState state.State) []gpa.MessageOut {
+func (sub *SyncVM) DecidedStateReceived(chainState state.State) {
 	if sub.chainState != nil {
-		return nil
+		return
 	}
 	sub.chainState = chainState
-	return sub.tryCompleteInputs()
+	sub.tryCompleteInputs()
 }
 
-func (sub *SyncVM) RandomnessReceived(randomness hashing.HashValue) []gpa.MessageOut {
+func (sub *SyncVM) RandomnessReceived(randomness hashing.HashValue) {
 	if sub.randomness != nil {
-		return nil
+		return
 	}
 	sub.randomness = &randomness
-	return sub.tryCompleteInputs()
+	sub.tryCompleteInputs()
 }
 
-func (sub *SyncVM) RequestsReceived(requests []isc.Request) []gpa.MessageOut {
+func (sub *SyncVM) RequestsReceived(requests []isc.Request) {
 	if sub.requests != nil || requests == nil {
-		return nil
+		return
 	}
 	sub.requests = requests
-	return sub.tryCompleteInputs()
+	sub.tryCompleteInputs()
 }
 
-func (sub *SyncVM) tryCompleteInputs() []gpa.MessageOut {
+func (sub *SyncVM) tryCompleteInputs() {
 	if sub.inputsReady || sub.aggregatedProposals == nil || sub.chainState == nil || sub.randomness == nil || sub.requests == nil {
-		return nil
+		return
 	}
 	sub.inputsReady = true
-	return sub.c.uponVMInputsReceived(sub.aggregatedProposals, sub.randomness, sub.requests)
+	sub.c.uponVMInputsReceived(sub.aggregatedProposals, sub.randomness, sub.requests)
 }
 
-func (sub *SyncVM) tryCompleteOutputs() []gpa.MessageOut {
+func (sub *SyncVM) tryCompleteOutputs() {
 	if sub.vmResult == nil || sub.aggregatedProposals == nil {
-		return nil
+		return
 	}
 	if sub.outputReady {
-		return nil
+		return
 	}
 	sub.outputReady = true
-	return sub.c.uponVMOutputReceived(sub.vmResult, sub.aggregatedProposals)
+	sub.c.uponVMOutputReceived(sub.vmResult, sub.aggregatedProposals)
 }
 
-func (sub *SyncVM) VMResultReceived(vmResult *vm.VMTaskResult) []gpa.MessageOut {
+func (sub *SyncVM) VMResultReceived(vmResult *vm.VMTaskResult) {
 	if sub.vmResult != nil || vmResult == nil {
-		return nil
+		return
 	}
 	sub.vmResult = vmResult
-	return sub.tryCompleteOutputs()
+	sub.tryCompleteOutputs()
 }
 
 // String tries to provide useful human-readable compact status.

@@ -22,7 +22,6 @@ package committeelog
 import (
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/iotaledger/hive.go/log"
 
@@ -55,8 +54,9 @@ type Output = map[LogIndex]*isc.StateAnchor
 
 // CommitteeLog is a protocol implementation.
 type CommitteeLog struct {
+	out                    gpa.OutBuffer
 	chainID                isc.ChainID            // Chain, for which this log is maintained by this committee.
-	committeeAddr          *cryptolib.Address     // Address of the committee running this chain.
+	CommitteeAddr          *cryptolib.Address     // Address of the committee running this chain.
 	consensusStateRegistry ConsensusStateRegistry // Persistent storage.
 	varLogIndex            *VarLogIndex           // Calculates the current log index.
 	varLocalView           *VarLocalView          // Tracks the pending alias outputs.
@@ -64,7 +64,6 @@ type CommitteeLog struct {
 	suspended              bool                   // Is this committee currently suspended?
 	output                 Output                 // The current output.
 	first                  bool                   // A workaround to senf the first nextLI messages.
-	asGPA                  gpa.GPA                // This object, just with all the needed wrappers.
 	log                    log.Logger
 }
 
@@ -117,7 +116,7 @@ func New(
 	// Create it.
 	cl := &CommitteeLog{
 		chainID:                chainID,
-		committeeAddr:          committeeAddr,
+		CommitteeAddr:          committeeAddr,
 		consensusStateRegistry: consensusStateRegistry,
 		varLogIndex:            nil, // Set bellow.
 		varLocalView:           nil, // Set bellow.
@@ -127,124 +126,89 @@ func New(
 		first:                  true,
 		log:                    log,
 	}
-	persistLIFunc := func(li LogIndex) {
-		if err := consensusStateRegistry.Set(chainID, committeeAddr, &State{LogIndex: li}); err != nil {
-			// Nothing to do, if we cannot persist this.
-			panic(fmt.Errorf("cannot persist the committeeLog state: %w", err))
-		}
-	}
-	cl.varConsInsts = NewVarConsInsts(prevLI.Next(), persistLIFunc, func(out Output) {
-		log.LogDebugf("VarConsInsts: Output received, %v", out)
-		cl.output = out
-	}, log.NewChildLogger("VCI"))
-	cl.varLogIndex = NewVarLogIndex(nodeIDs, n, f, prevLI, func(li LogIndex) []gpa.MessageOut {
-		log.LogDebugf("VarLogIndex: Output received, %v", li)
-		return cl.varConsInsts.LatestSeenLI(li, cl.varLogIndex.ConsensusStarted)
-	}, cclMetrics, log.NewChildLogger("VLI"))
-	cl.varLocalView = NewVarLocalView(pipeliningLimit, func(ao *isc.StateAnchor) []gpa.MessageOut {
-		log.LogDebugf("VarLocalView: Output received, %v", ao)
-		return cl.varConsInsts.LatestL1Anchor(ao, cl.varLogIndex.ConsensusStarted)
-	}, log.NewChildLogger("VLV"))
-	cl.asGPA = gpa.NewOwnHandler(me, cl)
+	cl.varConsInsts = NewVarConsInsts(cl, prevLI.Next(), log.NewChildLogger("VCI"))
+	cl.varLogIndex = NewVarLogIndex(cl, nodeIDs, n, f, prevLI, cclMetrics, log.NewChildLogger("VLI"))
+	cl.varLocalView = NewVarLocalView(cl, pipeliningLimit, log.NewChildLogger("VLV"))
 	return cl, nil
 }
 
-// AsGPA implements the CommitteeLog interface.
-func (cl *CommitteeLog) AsGPA() gpa.GPA {
-	return cl.asGPA
+func (cl *CommitteeLog) setOutput(out Output) {
+	cl.log.LogDebugf("VarConsInsts: Output received, %v", out)
+	cl.output = out
 }
 
-// Input implements the gpa.GPA interface.
-func (cl *CommitteeLog) Input(input gpa.Input) []gpa.MessageOut {
-	switch input.(type) {
-	case *inputCanPropose:
-		break // Don't log, its periodic.
-	default:
-		cl.log.LogDebugf("Input %T: %+v", input, input)
+func (cl *CommitteeLog) persistLI(li LogIndex) {
+	if err := cl.consensusStateRegistry.Set(cl.chainID, cl.CommitteeAddr, &State{LogIndex: li}); err != nil {
+		// Nothing to do, if we cannot persist this.
+		panic(fmt.Errorf("cannot persist the committeeLog state: %w", err))
 	}
-	switch input := input.(type) {
-	case *inputAnchorConfirmed:
-		return cl.handleInputAnchorConfirmed(input)
-	case *inputConsensusOutputSkip:
-		return cl.handleInputConsensusOutputSkip(input)
-	case *inputConsensusOutputConfirmed:
-		return cl.handleInputConsensusOutputConfirmed(input)
-	case *inputConsensusOutputRejected:
-		return cl.handleInputConsensusOutputRejected(input)
-	case *inputConsensusTimeout:
-		return cl.handleInputConsensusTimeout(input)
-	case *inputCanPropose:
-		return cl.handleInputCanPropose()
-	case *inputSuspend:
-		cl.handleInputSuspend()
-		return nil
-	}
-	panic(fmt.Errorf("unexpected input %T: %+v", input, input))
+}
+
+func (cl *CommitteeLog) SwapOutBuffer() []gpa.MessageOut {
+	return cl.out.Swap()
 }
 
 // Message implements the gpa.GPA interface.
-func (cl *CommitteeLog) Message(msg gpa.MessageIn) []gpa.MessageOut {
+func (cl *CommitteeLog) Message(msg gpa.MessageIn) {
 	_, ok := msg.Payload.(*MsgNextLogIndex)
 	if !ok {
 		cl.log.LogWarnf("dropping unexpected message %T: %+v", msg, msg)
-		return nil
+		return
 	}
-	return cl.handleMsgNextLogIndex(gpa.AsTypedMessageIn[*MsgNextLogIndex](msg))
+	cl.handleMsgNextLogIndex(gpa.AsTypedMessageIn[*MsgNextLogIndex](msg))
 }
 
 // The latest anchor object's version confirmed at the L1.
-func (cl *CommitteeLog) handleInputAnchorConfirmed(input *inputAnchorConfirmed) []gpa.MessageOut {
+func (cl *CommitteeLog) InputAnchorConfirmed(anchor *isc.StateAnchor) {
 	cl.suspended = false
-	return cl.varLocalView.AnchorConfirmed(input.anchor)
+	cl.varLocalView.AnchorConfirmed(anchor)
 }
 
 // Consensus completed with a decision to SKIP/⊥.
-func (cl *CommitteeLog) handleInputConsensusOutputSkip(input *inputConsensusOutputSkip) []gpa.MessageOut {
-	return cl.varConsInsts.ConsOutputSkip(input.logIndex, cl.varLogIndex.ConsensusStarted)
+func (cl *CommitteeLog) InputConsensusOutputSkip(logIndex LogIndex) {
+	cl.varConsInsts.ConsOutputSkip(logIndex)
 }
 
 // Consensus has decided, produced a TX and it is now confirmed by L1.
-func (cl *CommitteeLog) handleInputConsensusOutputConfirmed(input *inputConsensusOutputConfirmed) []gpa.MessageOut {
-	return cl.varConsInsts.ConsOutputDone(input.logIndex, input.nextAnchor, cl.varLogIndex.ConsensusStarted)
+func (cl *CommitteeLog) InputConsensusOutputConfirmed(nextAnchor *isc.StateAnchor, logIndex LogIndex) {
+	cl.varConsInsts.ConsOutputDone(logIndex, nextAnchor)
 }
 
 // Consensus has decided, produced a TX but it was rejected by L1.
-func (cl *CommitteeLog) handleInputConsensusOutputRejected(input *inputConsensusOutputRejected) []gpa.MessageOut {
-	return cl.varConsInsts.ConsOutputSkip(input.logIndex, cl.varLogIndex.ConsensusStarted) // This will cause proposal of our latest L1 Anchor.
+func (cl *CommitteeLog) InputConsensusOutputRejected(anchor *isc.StateAnchor, logIndex LogIndex) {
+	cl.varConsInsts.ConsOutputSkip(logIndex) // This will cause proposal of our latest L1 Anchor.
 }
 
 // Consensus tries to decide for too long. Maybe quorum assumption has been violated.
-func (cl *CommitteeLog) handleInputConsensusTimeout(input *inputConsensusTimeout) []gpa.MessageOut {
-	return cl.varConsInsts.ConsOutputTimeout(input.logIndex, cl.varLogIndex.ConsensusStarted)
+func (cl *CommitteeLog) InputConsensusTimeout(logIndex LogIndex) {
+	cl.varConsInsts.ConsOutputTimeout(logIndex)
 }
 
-func (cl *CommitteeLog) handleInputCanPropose() []gpa.MessageOut {
-	msgs := cl.varConsInsts.Tick(cl.varLogIndex.ConsensusStarted)
+func (cl *CommitteeLog) InputCanPropose() {
+	cl.varConsInsts.Tick()
 
 	if cl.first && cl.output != nil && len(cl.output) > 0 {
 		// This is a workaround for sending initial NextLI messages on boot.
 		cl.first = false
 		for li := range cl.output {
 			cl.log.LogDebugf("Sending initial NextLI messages for LI=%v", li)
-			msgs = slices.Concat(msgs, cl.varLogIndex.ConsensusStarted(li))
+			cl.varLogIndex.ConsensusStarted(li)
 		}
-		return msgs
 	}
-	return msgs
 }
 
-func (cl *CommitteeLog) handleInputSuspend() {
+func (cl *CommitteeLog) InputSuspend() {
 	cl.suspended = true
 }
 
 // > ON Reception of ⟨NextLI, •⟩ message:
 // >   ...
-func (cl *CommitteeLog) handleMsgNextLogIndex(msg gpa.TypedMessageIn[*MsgNextLogIndex]) []gpa.MessageOut {
-	return cl.varLogIndex.MsgNextLogIndexReceived(msg)
+func (cl *CommitteeLog) handleMsgNextLogIndex(msg gpa.TypedMessageIn[*MsgNextLogIndex]) {
+	cl.varLogIndex.MsgNextLogIndexReceived(msg)
 }
 
 // Output implements the gpa.GPA interface.
-func (cl *CommitteeLog) Output() gpa.Output {
+func (cl *CommitteeLog) Output() Output {
 	out := cl.output
 	if out == nil || cl.suspended {
 		return nil // Untyped nil.

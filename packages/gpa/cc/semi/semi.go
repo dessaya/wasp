@@ -7,70 +7,61 @@
 package semi
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/iotaledger/wasp/v2/packages/gpa"
+	"github.com/iotaledger/wasp/v2/packages/gpa/cc/blssig"
 )
 
-type ccSemi struct {
-	target gpa.GPA
+type CommonCoin struct {
+	target *blssig.CommonCoin
 	index  int
 	output *bool
 }
 
-var _ gpa.GPA = &ccSemi{}
+var _ gpa.GPA = &CommonCoin{}
 
-func New(index int, target gpa.GPA) gpa.GPA {
-	return &ccSemi{index: index, target: target}
+func New(index int, target *blssig.CommonCoin) *CommonCoin {
+	return &CommonCoin{index: index, target: target}
 }
 
-func (cc *ccSemi) Input(input gpa.Input) []gpa.MessageOut {
-	if input != nil {
-		panic(errors.New("input must be nil"))
+func (cc *CommonCoin) SwapOutBuffer() []gpa.MessageOut {
+	if cc.index%5 < 4 {
+		return nil
 	}
+	return cc.target.SwapOutBuffer()
+}
+
+func (cc *CommonCoin) Input() {
 	mod5 := cc.index % 5
 	if mod5 < 2 {
 		coin := true
 		cc.output = &coin
-		return nil
+		return
 	}
 	if mod5 < 4 {
 		coin := false
 		cc.output = &coin
-		return nil
+		return
 	}
-	msgs := cc.target.Input(input)
-	cc.checkOutput()
-	return msgs
+	cc.target.Input()
 }
 
-func (cc *ccSemi) Message(msg gpa.MessageIn) []gpa.MessageOut {
-	if cc.output != nil {
-		return nil
-	}
-	msgs := cc.target.Message(msg)
-	cc.checkOutput()
-	return msgs
-}
-
-func (cc *ccSemi) checkOutput() {
+func (cc *CommonCoin) Message(msg gpa.MessageIn) {
 	if cc.output != nil {
 		return
 	}
-	if out := cc.target.Output(); out != nil {
-		cc.output = out.(*bool)
-	}
+	cc.target.Message(msg)
 }
 
-func (cc *ccSemi) Output() gpa.Output {
-	if cc.output == nil {
-		return nil // Untyped nil.
+func (cc *CommonCoin) Output() *bool {
+	if cc.index%5 < 4 {
+		return cc.output
 	}
-	return cc.output
+	return cc.target.Output()
 }
 
-func (cc *ccSemi) StatusString() string {
+func (cc *CommonCoin) StatusString() string {
 	if cc.output != nil {
 		// Try produce compact output.
 		return fmt.Sprintf("{CC:semi, index=%v, output=%v}", cc.index, *cc.output)
@@ -78,6 +69,6 @@ func (cc *ccSemi) StatusString() string {
 	return fmt.Sprintf("{CC:semi, index=%v, output=%v, target=%v}", cc.index, cc.output, cc.target.StatusString())
 }
 
-func (cc *ccSemi) UnmarshalPayload(data []byte) (gpa.MessagePayload, error) {
+func (cc *CommonCoin) UnmarshalPayload(data []byte) (gpa.MessagePayload, error) {
 	return cc.target.UnmarshalPayload(data)
 }

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/iotaledger/wasp/v2/packages/coin"
-	"github.com/iotaledger/wasp/v2/packages/gpa"
 	"github.com/iotaledger/wasp/v2/packages/isc"
 	"github.com/iotaledger/wasp/v2/packages/parameters"
 )
@@ -50,53 +49,53 @@ func (s *SyncNodeconn) String() string {
 	return str
 }
 
-func (s *SyncNodeconn) HaveInputAnchor(anchor *isc.StateAnchor) []gpa.MessageOut {
+func (s *SyncNodeconn) HaveInputAnchor(anchor *isc.StateAnchor) {
 	if s.inputAnchorReceived {
-		return nil
+		return
 	}
 	s.inputAnchor = anchor // can be nil.
 	s.inputAnchorReceived = true
-	return s.tryCompleteInputs()
+	s.tryCompleteInputs()
 }
 
-func (s *SyncNodeconn) HaveState() []gpa.MessageOut {
+func (s *SyncNodeconn) HaveState() {
 	if s.stateReceived {
-		return nil
+		return
 	}
 	s.stateReceived = true
-	return s.tryCompleteInputs()
+	s.tryCompleteInputs()
 }
 
-func (s *SyncNodeconn) HaveRequests() []gpa.MessageOut {
+func (s *SyncNodeconn) HaveRequests() {
 	if s.requestsReceived {
-		return nil
+		return
 	}
 	s.requestsReceived = true
-	return s.tryCompleteInputs()
+	s.tryCompleteInputs()
 }
 
-func (s *SyncNodeconn) tryCompleteInputs() []gpa.MessageOut {
+func (s *SyncNodeconn) tryCompleteInputs() {
 	if !s.inputAnchorReceived || !s.stateReceived || !s.requestsReceived || s.inputProcessed {
-		return nil
+		return
 	}
 	s.inputProcessed = true
-	return s.c.uponNodeconnInputsReady(s.inputAnchor)
+	s.c.uponNodeconnInputsReady(s.inputAnchor)
 }
 
-func (s *SyncNodeconn) HaveL1Info(gasCoins []*coin.CoinWithRef, l1params *parameters.L1Params) []gpa.MessageOut {
+func (s *SyncNodeconn) HaveL1Info(gasCoins []*coin.CoinWithRef, l1params *parameters.L1Params) {
 	if s.gasCoins == nil && gasCoins != nil {
 		s.gasCoins = gasCoins
 	}
 	if s.l1params == nil && l1params != nil {
 		s.l1params = l1params
 	}
-	return s.tryCompleteOutput()
+	s.tryCompleteOutput()
 }
 
-func (s *SyncNodeconn) tryCompleteOutput() []gpa.MessageOut {
+func (s *SyncNodeconn) tryCompleteOutput() {
 	if s.outputProcessed || s.gasCoins == nil || s.l1params == nil {
-		return nil
+		return
 	}
 	s.outputProcessed = true
-	return s.c.uponNodeconnOutputReady(s.gasCoins, s.l1params)
+	s.c.uponNodeconnOutputReady(s.gasCoins, s.l1params)
 }

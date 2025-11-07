@@ -87,17 +87,11 @@ func AsTypedMessageIn[T MessagePayload](msg MessageIn) TypedMessageIn[T] {
 	}
 }
 
-type (
-	Input  any
-	Output any
-)
-
 // GPA is a generic interface for functional style distributed algorithms.
 // GPA stands for Generic Pure Algorithm.
 type GPA interface {
-	Input(inp Input) []MessageOut
-	Message(msg MessageIn) []MessageOut
-	Output() Output
+	Message(msg MessageIn)
+	SwapOutBuffer() []MessageOut
 	StatusString() string // Status of the protocol as a string.
 	UnmarshalPayload(data []byte) (MessagePayload, error)
 }
@@ -145,4 +139,22 @@ func UnmarshalPayload(data []byte, mapper PayloadAllocator, fallback ...PayloadF
 
 type Logger interface {
 	LogWarnf(msg string, args ...any)
+}
+
+type OutBuffer struct {
+	msgs []MessageOut
+}
+
+func (o *OutBuffer) Put(m MessageOut) {
+	o.msgs = append(o.msgs, m)
+}
+
+func (o *OutBuffer) PutAll(ms []MessageOut) {
+	o.msgs = append(o.msgs, ms...)
+}
+
+func (o *OutBuffer) Swap() []MessageOut {
+	ret := o.msgs
+	o.msgs = nil
+	return ret
 }

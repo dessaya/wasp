@@ -86,20 +86,17 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"slices"
 
+	"github.com/samber/lo"
 	"go.dedis.ch/kyber/v3"
 	"go.dedis.ch/kyber/v3/share"
 	"go.dedis.ch/kyber/v3/suites"
 
-	"github.com/samber/lo"
-
 	bcs "github.com/iotaledger/bcs-go"
 	"github.com/iotaledger/hive.go/log"
-
 	"github.com/iotaledger/wasp/v2/packages/gpa"
 	"github.com/iotaledger/wasp/v2/packages/gpa/acss/crypto"
-	rbc "github.com/iotaledger/wasp/v2/packages/gpa/rbc/bracha"
+	"github.com/iotaledger/wasp/v2/packages/gpa/rbc/bracha"
 )
 
 const (
@@ -111,7 +108,8 @@ type Output struct {
 	Commits  []kyber.Point   // Feldman's commitment to the shared polynomial.
 }
 
-type acssImpl struct {
+type ACSS struct {
+	out           gpa.OutBuffer
 	suite         suites.Suite
 	n             int
 	f             int
@@ -123,7 +121,7 @@ type acssImpl struct {
 	dealCB        func(int, []byte) []byte                   // Callback to be called on the encrypted deals (for tests actually).
 	peerPKs       map[gpa.NodeID]kyber.Point                 // Peer public keys.
 	peerIdx       []gpa.NodeID                               // Particular order of the nodes (position in the polynomial).
-	rbc           gpa.GPA                                    // RBC to share `C||E`.
+	rbc           *bracha.RBC                                // RBC to share `C||E`.
 	rbcOut        *crypto.Deal                               // Deal broadcasted by the dealer.
 	voteOKRecv    map[gpa.NodeID]bool                        // A set of received OK votes.
 	voteREADYRecv map[gpa.NodeID]bool                        // A set of received READY votes.
@@ -137,7 +135,7 @@ type acssImpl struct {
 	log           log.Logger
 }
 
-var _ gpa.GPA = &acssImpl{}
+var _ gpa.GPA = &ACSS{}
 
 func New(
 	suite suites.Suite, // Ed25519
@@ -149,12 +147,12 @@ func New(
 	dealer gpa.NodeID, // The dealer node for this protocol instance.
 	dealCB func(int, []byte) []byte, // For tests only: interceptor for the deal to be shared.
 	log log.Logger, // A logger to use.
-) gpa.GPA {
+) *ACSS {
 	n := len(peers)
 	if dealCB == nil {
 		dealCB = func(i int, b []byte) []byte { return b }
 	}
-	a := acssImpl{
+	a := &ACSS{
 		suite:         suite,
 		n:             n,
 		f:             f,
@@ -166,8 +164,8 @@ func New(
 		dealCB:        dealCB,
 		peerPKs:       peerPKs,
 		peerIdx:       peers,
-		rbc:           rbc.New(peers, f, me, dealer, math.MaxInt, func(b []byte) bool { return true }, log), // TODO: Provide meaningful maxMsgSize
-		rbcOut:        nil,                                                                                  // Will be set on output from the RBC.
+		rbc:           bracha.New(peers, f, me, dealer, math.MaxInt, func(b []byte) bool { return true }, log), // TODO: Provide meaningful maxMsgSize
+		rbcOut:        nil,                                                                                     // Will be set on output from the RBC.
 		voteOKRecv:    map[gpa.NodeID]bool{},
 		voteREADYRecv: map[gpa.NodeID]bool{},
 		voteREADYSent: false,
@@ -190,44 +188,44 @@ func New(
 	if a.myIdx = a.peerIndex(me); a.myIdx == -1 {
 		panic("i'm not in the peer list")
 	}
-	return gpa.NewOwnHandler(me, &a)
+	return a
+}
+
+// SwapOutBuffer implements gpa.GPA.
+func (a *ACSS) SwapOutBuffer() []gpa.MessageOut {
+	return a.out.Swap()
 }
 
 // Input for the algorithm is the secret to share.
 // It can be provided by the dealer only.
-func (a *acssImpl) Input(input gpa.Input) []gpa.MessageOut {
+func (a *ACSS) Input(secretToShare kyber.Scalar) {
 	if a.me != a.dealer {
 		panic(errors.New("only dealer can initiate the sharing"))
 	}
-	if input == nil {
-		panic(errors.New("we expect kyber.Scalar as input"))
-	}
-	return a.handleInput(input.(kyber.Scalar))
+	a.handleInput(secretToShare)
 }
 
 // Receive all the messages and route them to the appropriate handlers.
-func (a *acssImpl) Message(msg gpa.MessageIn) []gpa.MessageOut {
+func (a *ACSS) Message(msg gpa.MessageIn) {
 	switch m := msg.Payload.(type) {
 	case *gpa.WrappingMsg:
 		switch m.Subsystem() {
 		case subsystemRBC:
-			return a.handleRBCMessage(gpa.AsTypedMessageIn[*gpa.WrappingMsg](msg))
+			a.handleRBCMessage(gpa.AsTypedMessageIn[*gpa.WrappingMsg](msg))
 		default:
 			a.log.LogWarnf("unexpected wrapped message subsystem: %+v", m)
-			return nil
 		}
 	case *msgVote:
 		switch m.kind {
 		case msgVoteOK:
-			return a.handleVoteOK(gpa.AsTypedMessageIn[*msgVote](msg))
+			a.handleVoteOK(gpa.AsTypedMessageIn[*msgVote](msg))
 		case msgVoteREADY:
-			return a.handleVoteREADY(gpa.AsTypedMessageIn[*msgVote](msg))
+			a.handleVoteREADY(gpa.AsTypedMessageIn[*msgVote](msg))
 		default:
 			a.log.LogWarnf("unexpected vote message: %+v", m)
-			return nil
 		}
 	case *msgImplicateRecover:
-		return a.handleImplicateRecoverReceived(gpa.AsTypedMessageIn[*msgImplicateRecover](msg))
+		a.handleImplicateRecoverReceived(gpa.AsTypedMessageIn[*msgImplicateRecover](msg))
 	default:
 		panic(fmt.Errorf("unexpected message: %+v", msg))
 	}
@@ -240,7 +238,7 @@ func (a *acssImpl) Message(msg gpa.MessageIn) []gpa.MessageOut {
 // >
 // > // party i (including the dealer)
 // > RBC(C||E)
-func (a *acssImpl) handleInput(secretToShare kyber.Scalar) []gpa.MessageOut {
+func (a *ACSS) handleInput(secretToShare kyber.Scalar) {
 	pubKeys := make([]kyber.Point, 0)
 	for _, peerID := range a.peerIdx {
 		pubKeys = append(pubKeys, a.peerPKs[peerID])
@@ -253,30 +251,35 @@ func (a *acssImpl) handleInput(secretToShare kyber.Scalar) []gpa.MessageOut {
 
 	// > RBC(C||E)
 	rbcCEPayloadBytes := bcs.MustMarshal(&msgRBCCEPayload{suite: a.suite, data: data})
-	msgs := a.msgWrapper.WrapMessagesOut(subsystemRBC, 0, a.rbc.Input(rbcCEPayloadBytes))
-	return slices.Concat(msgs, a.tryHandleRBCTermination(false))
+	a.rbc.Input(rbcCEPayloadBytes)
+	a.tryHandleRBCTermination(false)
 }
 
 // Delegate received messages to the RBC and handle its output.
 //
 // > // party i (including the dealer)
 // > RBC(C||E)
-func (a *acssImpl) handleRBCMessage(m gpa.TypedMessageIn[*gpa.WrappingMsg]) []gpa.MessageOut {
+func (a *ACSS) handleRBCMessage(m gpa.TypedMessageIn[*gpa.WrappingMsg]) {
 	wasOut := a.rbc.Output() != nil // To send the msgRBCCEOutput message once (for perf reasons).
-	msgs := a.msgWrapper.WrapMessagesOut(subsystemRBC, 0, a.rbc.Message(m.Payload.WrappedIn(m.Sender)))
-	return slices.Concat(msgs, a.tryHandleRBCTermination(wasOut))
+	a.rbc.Message(m.Payload.WrappedIn(m.Sender))
+	a.tryHandleRBCTermination(wasOut)
 }
 
-func (a *acssImpl) tryHandleRBCTermination(wasOut bool) []gpa.MessageOut {
+func (a *ACSS) tryHandleRBCTermination(wasOut bool) {
+	msgs, err := a.msgWrapper.WrapMessagesOut(subsystemRBC, 0)
+	if err != nil {
+		panic(fmt.Sprintf("acss: internal error: %v", err))
+	}
+	a.out.PutAll(msgs)
+
 	if out := a.rbc.Output(); !wasOut && out != nil {
 		// Send the result for self as a message (maybe the code will look nicer this way).
-		outParsed, err := bcs.UnmarshalInto(out.([]byte), &msgRBCCEPayload{suite: a.suite})
+		outParsed, err := bcs.UnmarshalInto(out, &msgRBCCEPayload{suite: a.suite})
 		if err != nil {
 			outParsed = &msgRBCCEPayload{err: err}
 		}
-		return a.handleRBCOutput(outParsed)
+		a.handleRBCOutput(outParsed)
 	}
-	return nil
 }
 
 // Upon receiving the RBC output...
@@ -286,48 +289,47 @@ func (a *acssImpl) tryHandleRBCTermination(wasOut bool) []gpa.MessageOut {
 // >   send <IMPLICATE, i, skᵢ> to all parties
 // > else:
 // >   send <OK>
-func (a *acssImpl) handleRBCOutput(rbcOutput *msgRBCCEPayload) []gpa.MessageOut {
+func (a *ACSS) handleRBCOutput(rbcOutput *msgRBCCEPayload) {
 	if a.outS != nil || a.rbcOut != nil {
 		// Take the first RBC output only.
-		return nil
+		return
 	}
 	//
 	// Store the broadcast result and process pending IMPLICATE/RECOVER messages, if any.
 	if rbcOutput.err != nil {
-		return a.broadcastImplicate(rbcOutput.err)
+		a.broadcastImplicate(rbcOutput.err)
+		return
 	}
 	deal, err := crypto.DealUnmarshalBinary(a.suite, a.n, rbcOutput.data)
 	if err != nil {
-		return a.broadcastImplicate(errors.New("cannot unmarshal msgRBCCEPayload.data"))
+		a.broadcastImplicate(errors.New("cannot unmarshal msgRBCCEPayload.data"))
+		return
 	}
 	a.rbcOut = deal
-	msgs := a.handleImplicateRecoverPending()
+	a.handleImplicateRecoverPending()
 	//
 	// Process the RBC output, as described above.
 	secret := crypto.Secret(a.suite, a.rbcOut.PubKey, a.mySK)
 	myShare, err := crypto.DecryptShare(a.suite, a.rbcOut, a.myIdx, secret)
 	if err != nil {
-		return slices.Concat(msgs, a.broadcastImplicate(err))
+		a.broadcastImplicate(err)
+		return
 	}
 	a.outS = myShare
 	a.tryOutput() // Maybe the READY messages are already received.
-	return slices.Concat(
-		msgs,
-		a.broadcastVote(msgVoteOK),
-		a.handleImplicateRecoverPending(),
-	)
+	a.broadcastVote(msgVoteOK)
+	a.handleImplicateRecoverPending()
 }
 
 // > on receiving <OK> from n-f parties:
 // >   send <READY> to all parties
-func (a *acssImpl) handleVoteOK(msg gpa.TypedMessageIn[*msgVote]) []gpa.MessageOut {
+func (a *ACSS) handleVoteOK(msg gpa.TypedMessageIn[*msgVote]) {
 	a.voteOKRecv[msg.Sender] = true
 	count := len(a.voteOKRecv)
 	if !a.voteREADYSent && count >= (a.n-a.f) {
 		a.voteREADYSent = true
-		return a.broadcastVote(msgVoteREADY)
+		a.broadcastVote(msgVoteREADY)
 	}
-	return nil
 }
 
 // > on receiving <READY> from f+1 parties:
@@ -337,44 +339,41 @@ func (a *acssImpl) handleVoteOK(msg gpa.TypedMessageIn[*msgVote]) []gpa.MessageO
 // >   if sᵢ is valid:
 // >     out = true
 // >     output sᵢ
-func (a *acssImpl) handleVoteREADY(msg gpa.TypedMessageIn[*msgVote]) []gpa.MessageOut {
+func (a *ACSS) handleVoteREADY(msg gpa.TypedMessageIn[*msgVote]) {
 	a.voteREADYRecv[msg.Sender] = true
 	count := len(a.voteREADYRecv)
-	var msgs []gpa.MessageOut
 	if !a.voteREADYSent && count >= (a.f+1) {
-		msgs = a.broadcastVote(msgVoteREADY)
+		a.broadcastVote(msgVoteREADY)
 		a.voteREADYSent = true
 	}
 	a.tryOutput()
-	return slices.Concat(msgs, a.handleImplicateRecoverPending())
+	a.handleImplicateRecoverPending()
 }
 
 // It is possible that we are receiving IMPLICATE/RECOVER messages before our RBC is completed.
 // We store these messages for processing after that, if RBC is not done and process it otherwise.
-func (a *acssImpl) handleImplicateRecoverReceived(msg gpa.TypedMessageIn[*msgImplicateRecover]) []gpa.MessageOut {
+func (a *ACSS) handleImplicateRecoverReceived(msg gpa.TypedMessageIn[*msgImplicateRecover]) {
 	if a.rbcOut == nil {
 		a.pendingIRMsgs = append(a.pendingIRMsgs, msg)
-		return nil
+		return
 	}
 	switch msg.Payload.kind {
 	case msgImplicateRecoverKindIMPLICATE:
-		return a.handleImplicate(msg)
+		a.handleImplicate(msg)
 	case msgImplicateRecoverKindRECOVER:
-		return a.handleRecover(msg)
+		a.handleRecover(msg)
 	default:
 		a.log.LogWarnf("handleImplicateRecoverReceived: unexpected msgImplicateRecover.kind=%v, message: %+v", msg.Payload.kind, msg)
-		return nil
 	}
 }
 
-func (a *acssImpl) handleImplicateRecoverPending() []gpa.MessageOut {
+func (a *ACSS) handleImplicateRecoverPending() {
 	//
 	// Only process the IMPLICATE/RECOVER messages, if this node has RBC completed.
 	if a.rbcOut == nil {
-		return nil
+		return
 	}
 	postponedIRMsgs := []gpa.TypedMessageIn[*msgImplicateRecover]{}
-	var msgs []gpa.MessageOut
 	for _, m := range a.pendingIRMsgs {
 		switch m.Payload.kind {
 		case msgImplicateRecoverKindIMPLICATE:
@@ -385,19 +384,18 @@ func (a *acssImpl) handleImplicateRecoverPending() []gpa.MessageOut {
 			// >       return
 			//
 			if a.output {
-				msgs = slices.Concat(msgs, a.handleImplicate(m))
+				a.handleImplicate(m)
 			} else {
 				postponedIRMsgs = append(postponedIRMsgs, m)
 			}
 		case msgImplicateRecoverKindRECOVER:
-			msgs = slices.Concat(msgs, a.handleRecover(m))
+			a.handleRecover(m)
 		default:
 			a.log.LogWarnf("handleImplicateRecoverReceived: unexpected msgImplicateRecover.kind=%v, message: %+v", m.Payload.kind, m)
 			// Don't return here, we are just dropping incorrect message.
 		}
 	}
 	a.pendingIRMsgs = postponedIRMsgs
-	return msgs
 }
 
 // Here the RBC is assumed to be completed already, OUT is set and the private key is checked.
@@ -410,17 +408,17 @@ func (a *acssImpl) handleImplicateRecoverPending() []gpa.MessageOut {
 // >       return
 //
 // NOTE: We assume `if out == true:` stands for a wait for such condition.
-func (a *acssImpl) handleImplicate(msg gpa.TypedMessageIn[*msgImplicateRecover]) []gpa.MessageOut {
+func (a *ACSS) handleImplicate(msg gpa.TypedMessageIn[*msgImplicateRecover]) {
 	peerIndex := a.peerIndex(msg.Sender)
 	if peerIndex == -1 {
 		a.log.LogWarnf("implicate received from unknown peer: %v", msg.Sender)
-		return nil
+		return
 	}
 	//
 	// Check message duplicates.
 	if _, ok := a.implicateRecv[msg.Sender]; ok {
 		// Received the implicate before, just ignore it.
-		return nil
+		return
 	}
 	a.implicateRecv[msg.Sender] = true
 	//
@@ -428,17 +426,17 @@ func (a *acssImpl) handleImplicate(msg gpa.TypedMessageIn[*msgImplicateRecover])
 	secret, err := crypto.CheckImplicate(a.suite, a.rbcOut.PubKey, a.peerPKs[msg.Sender], msg.Payload.data)
 	if err != nil {
 		a.log.LogWarnf("Invalid implication received: %v", err)
-		return nil
+		return
 	}
 	_, err = crypto.DecryptShare(a.suite, a.rbcOut, peerIndex, secret)
 	if err == nil {
 		// if we are able to decrypt the share, the implication is not correct
 		a.log.LogWarn("encrypted share is valid")
-		return nil
+		return
 	}
 	//
 	// Create the reveal message.
-	return a.broadcastRecover()
+	a.broadcastRecover()
 }
 
 // Here the RBC is assumed to be completed already and the private key is checked.
@@ -451,25 +449,25 @@ func (a *acssImpl) handleImplicate(msg gpa.TypedMessageIn[*msgImplicateRecover])
 // >       sᵢ = SSS.Recover(T, f+1, n)(i)
 // >       out = true
 // >       output sᵢ
-func (a *acssImpl) handleRecover(msg gpa.TypedMessageIn[*msgImplicateRecover]) []gpa.MessageOut {
+func (a *ACSS) handleRecover(msg gpa.TypedMessageIn[*msgImplicateRecover]) {
 	if a.output {
 		// Ignore the RECOVER messages, if we are done with the output.
-		return nil
+		return
 	}
 	peerIndex := a.peerIndex(msg.Sender)
 	if peerIndex == -1 {
 		a.log.LogWarnf("Recover received from unexpected sender: %v", msg.Sender)
-		return nil
+		return
 	}
 	if _, ok := a.recoverRecv[msg.Sender]; ok {
 		a.log.LogWarnf("Recover was already received from %v", msg.Sender)
-		return nil
+		return
 	}
 
 	peerSecret, err := crypto.DecryptShare(a.suite, a.rbcOut, peerIndex, msg.Payload.data)
 	if err != nil {
 		a.log.LogWarn("invalid secret revealed")
-		return nil
+		return
 	}
 	a.recoverRecv[msg.Sender] = peerSecret
 
@@ -489,49 +487,47 @@ func (a *acssImpl) handleRecover(msg gpa.TypedMessageIn[*msgImplicateRecover]) [
 		}
 		a.outS = myPriShare
 		a.output = true
-		return nil
+		return
 	}
-
-	return nil
 }
 
-func (a *acssImpl) broadcastVote(voteKind msgVoteKind) []gpa.MessageOut {
-	return lo.Map(a.peerIdx, func(peer gpa.NodeID, _ int) gpa.MessageOut {
+func (a *ACSS) broadcastVote(voteKind msgVoteKind) {
+	a.out.PutAll(lo.Map(a.peerIdx, func(peer gpa.NodeID, _ int) gpa.MessageOut {
 		return gpa.NewMessageOut(peer, &msgVote{
 			kind: voteKind,
 		})
-	})
+	}))
 }
 
-func (a *acssImpl) broadcastImplicate(reason error) []gpa.MessageOut {
+func (a *ACSS) broadcastImplicate(reason error) {
 	a.log.LogWarnf("Sending implicate because of: %v", reason)
 	implicate := crypto.Implicate(a.suite, a.rbcOut.PubKey, a.mySK)
-	return a.broadcastImplicateRecover(msgImplicateRecoverKindIMPLICATE, implicate)
+	a.broadcastImplicateRecover(msgImplicateRecoverKindIMPLICATE, implicate)
 }
 
-func (a *acssImpl) broadcastRecover() []gpa.MessageOut {
+func (a *ACSS) broadcastRecover() {
 	secret := crypto.Secret(a.suite, a.rbcOut.PubKey, a.mySK)
-	return a.broadcastImplicateRecover(msgImplicateRecoverKindRECOVER, secret)
+	a.broadcastImplicateRecover(msgImplicateRecoverKindRECOVER, secret)
 }
 
-func (a *acssImpl) broadcastImplicateRecover(kind msgImplicateKind, data []byte) []gpa.MessageOut {
-	return lo.Map(a.peerIdx, func(peer gpa.NodeID, _ int) gpa.MessageOut {
+func (a *ACSS) broadcastImplicateRecover(kind msgImplicateKind, data []byte) {
+	a.out.PutAll(lo.Map(a.peerIdx, func(peer gpa.NodeID, _ int) gpa.MessageOut {
 		return gpa.NewMessageOut(peer, &msgImplicateRecover{
 			kind: kind,
 			i:    a.myIdx,
 			data: data,
 		})
-	})
+	}))
 }
 
-func (a *acssImpl) tryOutput() {
+func (a *ACSS) tryOutput() {
 	count := len(a.voteREADYRecv)
 	if count >= (a.n-a.f) && a.outS != nil {
 		a.output = true
 	}
 }
 
-func (a *acssImpl) peerIndex(peer gpa.NodeID) int {
+func (a *ACSS) peerIndex(peer gpa.NodeID) int {
 	for i := range a.peerIdx {
 		if a.peerIdx[i] == peer {
 			return i
@@ -540,7 +536,7 @@ func (a *acssImpl) peerIndex(peer gpa.NodeID) int {
 	return -1
 }
 
-func (a *acssImpl) Output() gpa.Output {
+func (a *ACSS) Output() *Output {
 	if a.output {
 		return &Output{
 			PriShare: a.outS,
@@ -550,6 +546,6 @@ func (a *acssImpl) Output() gpa.Output {
 	return nil
 }
 
-func (a *acssImpl) StatusString() string {
+func (a *ACSS) StatusString() string {
 	return fmt.Sprintf("{ACSS, output=%v, rbc=%v}", a.output, a.rbc.StatusString())
 }

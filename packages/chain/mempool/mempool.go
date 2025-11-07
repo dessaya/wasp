@@ -137,7 +137,7 @@ type mempoolImpl struct {
 	tangleTime                     time.Time
 	onLedgerPool                   RequestPool[isc.OnLedgerRequest] // TODO limit this pool
 	offLedgerPool                  *OffLedgerPool                   // TODO maybe use `RequestPool` too?
-	distSync                       gpa.GPA
+	distSync                       *distsync.MempoolSync
 	chainHeadAnchor                *isc.StateAnchor
 	chainHeadState                 state.State
 	serverNodesUpdatedPipe         pipe.Pipe[*reqServerNodesUpdated]
@@ -570,19 +570,21 @@ func (mpi *mempoolImpl) addOffledger(request isc.OffLedgerRequest) bool {
 func (mpi *mempoolImpl) handleServerNodesUpdated(recv *reqServerNodesUpdated) {
 	mpi.serverNodes = recv.serverNodePubKeys
 	mpi.committeeNodes = recv.committeePubKeys
-	mpi.sendMessages(mpi.distSync.Input(distsync.NewInputServerNodes(
+	mpi.distSync.InputServerNodes(
 		lo.Map(mpi.serverNodes, mpi.pubKeyAsNodeIDMap),
 		lo.Map(mpi.committeeNodes, mpi.pubKeyAsNodeIDMap),
-	)))
+	)
+	mpi.sendMessages()
 }
 
 func (mpi *mempoolImpl) handleAccessNodesUpdated(recv *reqAccessNodesUpdated) {
 	mpi.accessNodes = recv.accessNodePubKeys
 	mpi.committeeNodes = recv.committeePubKeys
-	mpi.sendMessages(mpi.distSync.Input(distsync.NewInputAccessNodes(
+	mpi.distSync.InputAccessNodes(
 		lo.Map(mpi.accessNodes, mpi.pubKeyAsNodeIDMap),
 		lo.Map(mpi.committeeNodes, mpi.pubKeyAsNodeIDMap),
-	)))
+	)
+	mpi.sendMessages()
 }
 
 // This implementation only tracks a single branch. So, we will only respond
@@ -731,7 +733,8 @@ func (mpi *mempoolImpl) handleConsensusRequests(recv *reqConsensusRequests) {
 	//
 	// Wait for missing requests.
 	for i := range missing {
-		mpi.sendMessages(mpi.distSync.Input(distsync.NewInputRequestNeeded(recv.ctx, missing[i])))
+		mpi.distSync.InputRequestNeeded(recv.ctx, missing[i])
+		mpi.sendMessages()
 	}
 	mpi.waitReq.WaitMany(recv.ctx, missing, func(req isc.Request) {
 		reqRefKey := isc.RequestRefFromRequest(req).AsKey()
@@ -787,7 +790,8 @@ func (mpi *mempoolImpl) handleReceiveOnLedgerRequest(request isc.OnLedgerRequest
 func (mpi *mempoolImpl) handleReceiveOffLedgerRequest(request isc.OffLedgerRequest) {
 	mpi.log.LogDebugf("Received request %v from outside.", request.ID())
 	if mpi.addOffledger(request) {
-		mpi.sendMessages(mpi.distSync.Input(distsync.NewInputPublishRequest(request)))
+		mpi.distSync.InputPublishRequest(request)
+		mpi.sendMessages()
 	}
 }
 
@@ -879,8 +883,8 @@ func (mpi *mempoolImpl) handleNetMessage(recv *peering.PeerMessageIn) {
 		return
 	}
 	// Output is handled via callbacks in this case.
-	outMsgs := mpi.distSync.Message(gpa.NewMessageIn(mpi.pubKeyAsNodeID(recv.SenderPubKey), msg))
-	mpi.sendMessages(outMsgs)
+	mpi.distSync.Message(gpa.NewMessageIn(mpi.pubKeyAsNodeID(recv.SenderPubKey), msg))
+	mpi.sendMessages()
 }
 
 func (mpi *mempoolImpl) handleDistSyncDebugTick() {
@@ -893,7 +897,8 @@ func (mpi *mempoolImpl) handleDistSyncDebugTick() {
 }
 
 func (mpi *mempoolImpl) handleDistSyncTimeTick() {
-	mpi.sendMessages(mpi.distSync.Input(distsync.NewInputTimeTick()))
+	mpi.distSync.InputTimeTick()
+	mpi.sendMessages()
 }
 
 // Re-send off-ledger messages that are hanging here for a long time.
@@ -905,7 +910,8 @@ func (mpi *mempoolImpl) handleRePublishTimeTick() {
 	retryOlder := time.Now().Add(-mpi.broadcastInterval)
 	mpi.offLedgerPool.Cleanup(func(request isc.OffLedgerRequest, ts time.Time) bool {
 		if ts.Before(retryOlder) {
-			mpi.sendMessages(mpi.distSync.Input(distsync.NewInputPublishRequest(request)))
+			mpi.distSync.InputPublishRequest(request)
+			mpi.sendMessages()
 		}
 		return true
 	})
@@ -968,11 +974,8 @@ func (mpi *mempoolImpl) tryCleanupProcessed(chainState state.State) {
 	mpi.offLedgerPool.Cleanup(unprocessedPredicate[isc.OffLedgerRequest](chainState, mpi.log))
 }
 
-func (mpi *mempoolImpl) sendMessages(outMsgs []gpa.MessageOut) {
-	if outMsgs == nil {
-		return
-	}
-	for _, msg := range outMsgs {
+func (mpi *mempoolImpl) sendMessages() {
+	for _, msg := range mpi.distSync.SwapOutBuffer() {
 		msgBytes := lo.Must(gpa.MarshalPayload(msg.Payload))
 		pm := peering.NewPeerMessageData(mpi.netPeeringID, peering.ReceiverMempool, msgTypeMempool, msgBytes)
 		mpi.net.SendMsgByPubKey(mpi.netPeerPubs[msg.Recipient], pm)

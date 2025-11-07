@@ -15,7 +15,6 @@
 package blssig
 
 import (
-	"errors"
 	"fmt"
 
 	"go.dedis.ch/kyber/v3/pairing"
@@ -24,11 +23,11 @@ import (
 	"go.dedis.ch/kyber/v3/sign/tbls"
 
 	"github.com/iotaledger/hive.go/log"
-
 	"github.com/iotaledger/wasp/v2/packages/gpa"
 )
 
-type ccImpl struct {
+type CommonCoin struct {
+	out       gpa.OutBuffer
 	suite     pairing.Suite
 	nodeIDs   []gpa.NodeID
 	pubPoly   *share.PubPoly
@@ -42,7 +41,7 @@ type ccImpl struct {
 	log       log.Logger
 }
 
-var _ gpa.GPA = &ccImpl{}
+var _ gpa.GPA = &CommonCoin{}
 
 func New(
 	suite pairing.Suite,
@@ -53,8 +52,8 @@ func New(
 	me gpa.NodeID,
 	sid []byte,
 	log log.Logger,
-) gpa.GPA {
-	cc := &ccImpl{
+) *CommonCoin {
+	return &CommonCoin{
 		suite:     suite,
 		nodeIDs:   nodeIDs,
 		pubPoly:   pubPoly,
@@ -67,16 +66,16 @@ func New(
 		output:    nil,
 		log:       log,
 	}
-	return cc
 }
 
-func (cc *ccImpl) Input(input gpa.Input) []gpa.MessageOut {
-	if input != nil {
-		panic(errors.New("input must be nil"))
-	}
+func (cc *CommonCoin) SwapOutBuffer() []gpa.MessageOut {
+	return cc.out.Swap()
+}
+
+func (cc *CommonCoin) Input() {
 	if _, ok := cc.sigShares[cc.me]; ok {
 		// Only consider the first input.
-		return nil
+		return
 	}
 	sigShare, err := tbls.Sign(cc.suite, cc.priShare, cc.sid)
 	if err != nil {
@@ -86,24 +85,22 @@ func (cc *ccImpl) Input(input gpa.Input) []gpa.MessageOut {
 	if cc.n == 1 {
 		coin := sigShare[len(sigShare)-1]%2 == 1
 		cc.output = &coin
-		return nil
+		return
 	}
 	cc.tryOutput()
-	var msgs []gpa.MessageOut
 	for _, nodeID := range cc.nodeIDs {
 		if nodeID != cc.me {
-			msgs = append(msgs, gpa.NewMessageOut(nodeID, &msgSigShare{
+			cc.out.Put(gpa.NewMessageOut(nodeID, &msgSigShare{
 				sigShare: sigShare,
 			}))
 		}
 	}
-	return msgs
 }
 
-func (cc *ccImpl) Message(msg gpa.MessageIn) []gpa.MessageOut {
+func (cc *CommonCoin) Message(msg gpa.MessageIn) {
 	if cc.output != nil {
 		// Decided, don't need to process messages anymore.
-		return nil
+		return
 	}
 	shareMsg, ok := msg.Payload.(*msgSigShare)
 	if !ok {
@@ -111,14 +108,13 @@ func (cc *ccImpl) Message(msg gpa.MessageIn) []gpa.MessageOut {
 	}
 	if _, ok := cc.sigShares[msg.Sender]; ok {
 		// Drop a duplicate.
-		return nil
+		return
 	}
 	cc.sigShares[msg.Sender] = shareMsg.sigShare
 	cc.tryOutput()
-	return nil
 }
 
-func (cc *ccImpl) tryOutput() {
+func (cc *CommonCoin) tryOutput() {
 	if len(cc.sigShares) < cc.t || cc.output != nil {
 		return
 	}
@@ -139,13 +135,10 @@ func (cc *ccImpl) tryOutput() {
 	cc.output = &coin
 }
 
-func (cc *ccImpl) Output() gpa.Output {
-	if cc.output == nil {
-		return nil // Untyped nil.
-	}
+func (cc *CommonCoin) Output() *bool {
 	return cc.output
 }
 
-func (cc *ccImpl) StatusString() string {
+func (cc *CommonCoin) StatusString() string {
 	return fmt.Sprintf("{CC:blssig, threshold=%v, sigShares=%v/%v, output=%v}", cc.t, len(cc.sigShares), cc.n, cc.output)
 }

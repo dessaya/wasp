@@ -33,7 +33,7 @@ func testBasic(t *testing.T, n int) {
 	chainID := isctest.RandomChainID()
 
 	servers := map[gpa.NodeID][]*cryptolib.PublicKey{}
-	nodes := map[gpa.NodeID]gpa.GPA{}
+	nodes := map[gpa.NodeID]*dist.AccessMgrDist{}
 	for i, nid := range nodeIDs {
 		nidCopy := nid
 		nodes[nid] = dist.NewAccessMgr(
@@ -43,14 +43,12 @@ func testBasic(t *testing.T, n int) {
 			},
 			func(pk *cryptolib.PublicKey) {},
 			log.NewChildLogger(fmt.Sprintf("N%v", i)),
-		).AsGPA()
+		)
+		nodes[nid].UpdateTrustedNodes(nodePubs)
+		nodes[nid].UpdateAccessNodes(chainID, nodePubs)
 	}
 
 	tc := gpa.NewTestContext(nodes)
-	for _, nid := range nodeIDs {
-		tc.WithInput(nid, dist.NewInputTrustedNodes(nodePubs))
-		tc.WithInput(nid, dist.NewInputAccessNodes(chainID, nodePubs))
-	}
 	tc.RunAll()
 	for nid := range nodes {
 		require.True(t,

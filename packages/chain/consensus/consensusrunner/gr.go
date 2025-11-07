@@ -113,7 +113,7 @@ type input struct {
 
 type ConsensusRunner struct {
 	me                          gpa.NodeID
-	consInst                    gpa.AckHandler
+	consInst                    gpa.AckHandler[*consensus.Consensus]
 	inputCh                     chan *input
 	inputReceived               *atomic.Bool
 	inputRotateToCh             chan *iotago.Address
@@ -219,7 +219,7 @@ func New(
 		gpa.NodeIDFromPublicKey,
 		validatorAgentID,
 		log,
-	).AsGPA()
+	)
 	runner.consInst = gpa.NewAckHandler(me, consInstRaw, redeliveryPeriod)
 
 	unhook := net.Attach(&netPeeringID, peering.ReceiverChainCons, func(recv *peering.PeerMessageIn) {
@@ -291,21 +291,24 @@ func (r *ConsensusRunner) run() { //nolint:gocyclo,funlen
 			printStatusCh = time.After(r.printStatusPeriod)
 			r.outputCB = inp.outputCB
 			r.recoverCB = inp.recoverCB
-			r.handleConsInput(consensus.NewInputProposal(inp.baseAnchor))
+			r.consInst.Nested().InputProposal(inp.baseAnchor)
+			r.handleCons()
 
 		case a, ok := <-r.inputRotateToCh:
 			if !ok {
 				r.inputRotateToCh = nil
 				continue
 			}
-			r.handleConsInput(consensus.NewInputRotateTo(a))
+			r.consInst.Nested().InputRotateTo(a)
+			r.handleCons()
 
 		case t, ok := <-r.inputTimeCh:
 			if !ok {
 				r.inputTimeCh = nil
 				continue
 			}
-			r.handleConsInput(consensus.NewInputTimeData(t))
+			r.consInst.Nested().InputTimeData(t)
+			r.handleCons()
 
 		case resp, ok := <-r.mempoolProposalsRespCh:
 			if !ok {
@@ -313,25 +316,29 @@ func (r *ConsensusRunner) run() { //nolint:gocyclo,funlen
 				continue
 			}
 			recoveryTimeoutCh = time.After(r.recoveryTimeout) // See comment for the InputProposal.
-			r.handleConsInput(consensus.NewInputMempoolProposal(resp))
+			r.consInst.Nested().InputMempoolProposal(resp)
+			r.handleCons()
 		case resp, ok := <-r.mempoolRequestsRespCh:
 			if !ok {
 				r.mempoolRequestsRespCh = nil
 				continue
 			}
-			r.handleConsInput(consensus.NewInputMempoolRequests(resp))
+			r.consInst.Nested().InputMempoolRequests(resp)
+			r.handleCons()
 		case _, ok := <-r.stateMgrStateProposalRespCh:
 			if !ok {
 				r.stateMgrStateProposalRespCh = nil
 				continue
 			}
-			r.handleConsInput(consensus.NewInputStateMgrProposalConfirmed())
+			r.consInst.Nested().InputStateMgrProposalConfirmed()
+			r.handleCons()
 		case resp, ok := <-r.stateMgrDecidedStateRespCh:
 			if !ok {
 				r.stateMgrDecidedStateRespCh = nil
 				continue
 			}
-			r.handleConsInput(consensus.NewInputStateMgrDecidedVirtualState(resp))
+			r.consInst.Nested().InputStateMgrDecidedVirtualState(resp)
+			r.handleCons()
 		case resp, ok := <-r.stateMgrSaveBlockRespCh:
 			if !ok {
 				r.stateMgrSaveBlockRespCh = nil
@@ -340,7 +347,8 @@ func (r *ConsensusRunner) run() { //nolint:gocyclo,funlen
 			if resp == nil {
 				panic(fmt.Errorf("cannot save produced block"))
 			}
-			r.handleConsInput(consensus.NewInputStateMgrBlockSaved(resp))
+			r.consInst.Nested().InputStateMgrBlockSaved(resp)
+			r.handleCons()
 
 		case t, ok := <-r.nodeConnL1InfoRespCh:
 			r.log.LogDebugf("ConsensusL1InfoProposal received, respCh=%v, response=%v", r.nodeConnL1InfoRespCh, t)
@@ -348,14 +356,16 @@ func (r *ConsensusRunner) run() { //nolint:gocyclo,funlen
 				r.nodeConnL1InfoRespCh = nil
 				continue
 			}
-			r.handleConsInput(consensus.NewInputL1Info(t.GetGasCoins(), t.GetL1Params()))
+			r.consInst.Nested().InputL1Info(t.GetGasCoins(), t.GetL1Params())
+			r.handleCons()
 
 		case resp, ok := <-r.vmRespCh:
 			if !ok {
 				r.vmRespCh = nil
 				continue
 			}
-			r.handleConsInput(consensus.NewInputVMResult(resp))
+			r.consInst.Nested().InputVMResult(resp)
+			r.handleCons()
 		case t, ok := <-redeliveryTickCh:
 			if !ok {
 				redeliveryTickCh = nil
@@ -385,16 +395,14 @@ func (r *ConsensusRunner) run() { //nolint:gocyclo,funlen
 	}
 }
 
-func (r *ConsensusRunner) handleConsInput(inp gpa.Input) {
-	outMsgs := r.consInst.Input(inp)
-	r.sendMessages(outMsgs)
+func (r *ConsensusRunner) handleCons() {
+	r.sendMessages(r.consInst.SwapOutBuffer())
 	r.tryHandleOutput()
 }
 
 func (r *ConsensusRunner) handleRedeliveryTick(t time.Time) {
-	outMsgs := r.consInst.Input(r.consInst.MakeTickInput(t))
-	r.sendMessages(outMsgs)
-	r.tryHandleOutput()
+	r.consInst.Tick(t)
+	r.handleCons()
 }
 
 func (r *ConsensusRunner) handleNetMessage(recv *peering.PeerMessageIn) {
@@ -403,17 +411,15 @@ func (r *ConsensusRunner) handleNetMessage(recv *peering.PeerMessageIn) {
 		r.log.LogWarnf("cannot parse message: %v", err)
 		return
 	}
-	outMsgs := r.consInst.Message(gpa.NewMessageIn(gpa.NodeIDFromPublicKey(recv.SenderPubKey), msg))
-	r.sendMessages(outMsgs)
-	r.tryHandleOutput()
+	r.consInst.Message(gpa.NewMessageIn(gpa.NodeIDFromPublicKey(recv.SenderPubKey), msg))
+	r.handleCons()
 }
 
 func (r *ConsensusRunner) tryHandleOutput() {
-	outputUntyped := r.consInst.Output()
-	if outputUntyped == nil {
+	output := r.consInst.Nested().Output()
+	if output == nil {
 		return
 	}
-	output := outputUntyped.(*consensus.Output)
 	if output.NeedMempoolProposal != nil && !r.mempoolProposalsAsked {
 		r.mempoolProposalsRespCh = r.mempool.ConsensusProposalAsync(r.ctx, output.NeedMempoolProposal, r.consensusID)
 		r.mempoolProposalsAsked = true

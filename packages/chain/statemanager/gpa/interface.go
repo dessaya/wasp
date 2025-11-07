@@ -3,17 +3,8 @@ package gpa
 import (
 	"time"
 
-	"github.com/iotaledger/wasp/v2/packages/chain/statemanager/snapshots"
-	"github.com/iotaledger/wasp/v2/packages/gpa"
 	"github.com/iotaledger/wasp/v2/packages/state"
 )
-
-type StateManagerOutput interface {
-	addBlockCommitted(uint32, *state.L1Commitment)
-	TakeBlocksCommitted() []snapshots.SnapshotInfo
-	addBlocksToCommit([]*state.L1Commitment)
-	TakeNextInputs() []gpa.Input
-}
 
 type SnapshotExistsFun func(uint32, *state.L1Commitment) bool
 

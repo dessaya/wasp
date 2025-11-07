@@ -5,7 +5,6 @@ package gpa
 
 import (
 	"fmt"
-	"slices"
 	"time"
 
 	"fortio.org/safecast"
@@ -25,9 +24,10 @@ const (
 // acknowledgement is received. To make this more efficient, acknowledgements
 // are piggy-backed on other messages (or sent stand-alone, if there is no
 // messages to piggy-back the acknowledgements).
-type ackHandler struct {
+type ackHandler[NestedGPA GPA] struct {
 	me           NodeID
-	nested       GPA
+	out          OutBuffer
+	nested       NestedGPA
 	resendPeriod time.Duration
 	initialized  *shrinkingmap.ShrinkingMap[NodeID, bool]
 	initPending  *shrinkingmap.ShrinkingMap[NodeID, []MessagePayload]
@@ -36,18 +36,15 @@ type ackHandler struct {
 	recvAcksIn   *shrinkingmap.ShrinkingMap[NodeID, map[int]*int]
 }
 
-type AckHandler interface {
+type AckHandler[NestedGPA GPA] interface {
 	GPA
+	Tick(timestamp time.Time)
 	DismissPeer(peerID NodeID) // To avoid resending messages to dead peers.
-	MakeTickInput(time.Time) Input
-	NestedMessage(msg MessageIn) []MessageOut
-	NestedCall(c func(GPA) []MessageOut) []MessageOut
+	Nested() NestedGPA
 }
 
-var _ AckHandler = &ackHandler{}
-
-func NewAckHandler(me NodeID, nested GPA, resendPeriod time.Duration) AckHandler {
-	return &ackHandler{
+func NewAckHandler[NestedGPA GPA](me NodeID, nested NestedGPA, resendPeriod time.Duration) AckHandler[NestedGPA] {
+	return &ackHandler[NestedGPA]{
 		me:           me,
 		nested:       nested,
 		resendPeriod: resendPeriod,
@@ -59,7 +56,7 @@ func NewAckHandler(me NodeID, nested GPA, resendPeriod time.Duration) AckHandler
 	}
 }
 
-func (a *ackHandler) DismissPeer(peerID NodeID) {
+func (a *ackHandler[NestedGPA]) DismissPeer(peerID NodeID) {
 	a.initialized.Delete(peerID)
 	a.initPending.Delete(peerID)
 	a.counters.Delete(peerID)
@@ -67,47 +64,32 @@ func (a *ackHandler) DismissPeer(peerID NodeID) {
 	a.recvAcksIn.Delete(peerID)
 }
 
-func (a *ackHandler) MakeTickInput(timestamp time.Time) Input {
-	return &ackHandlerTick{timestamp: timestamp}
+func (a *ackHandler[NestedGPA]) Nested() NestedGPA {
+	return a.nested
 }
 
-func (a *ackHandler) Input(input Input) []MessageOut {
-	switch input := input.(type) {
-	case *ackHandlerTick:
-		return a.handleTickMsg(input)
-	default:
-		return a.makeBatches(a.nested.Input(input))
-	}
+func (a *ackHandler[NestedGPA]) SwapOutBuffer() []MessageOut {
+	return a.out.Swap()
 }
 
-func (a *ackHandler) Message(msg MessageIn) []MessageOut {
+func (a *ackHandler[NestedGPA]) Message(msg MessageIn) {
+	defer a.makeBatches()
+
 	switch msg.Payload.(type) {
 	case *ackHandlerReset:
-		return a.handleResetMsg(AsTypedMessageIn[*ackHandlerReset](msg))
+		a.handleResetMsg(AsTypedMessageIn[*ackHandlerReset](msg))
 	case *ackHandlerBatch:
-		return a.handleBatchMsg(AsTypedMessageIn[*ackHandlerBatch](msg))
+		a.handleBatchMsg(AsTypedMessageIn[*ackHandlerBatch](msg))
 	default:
 		panic(fmt.Errorf("unexpected message type: %+v", msg))
 	}
 }
 
-func (a *ackHandler) NestedMessage(msg MessageIn) []MessageOut {
-	return a.makeBatches(a.nested.Message(msg))
-}
-
-func (a *ackHandler) NestedCall(c func(GPA) []MessageOut) []MessageOut {
-	return a.makeBatches(c(a.nested))
-}
-
-func (a *ackHandler) Output() Output {
-	return a.nested.Output()
-}
-
-func (a *ackHandler) StatusString() string {
+func (a *ackHandler[NestedGPA]) StatusString() string {
 	return fmt.Sprintf("{ACK:%s}", a.nested.StatusString())
 }
 
-func (a *ackHandler) UnmarshalPayload(data []byte) (MessagePayload, error) {
+func (a *ackHandler[NestedGPA]) UnmarshalPayload(data []byte) (MessagePayload, error) {
 	msg, err := UnmarshalPayload(data, PayloadAllocator{
 		msgTypeAckHandlerReset: func() MessagePayload { return &ackHandlerReset{} },
 		msgTypeAckHandlerBatch: func() MessagePayload { return &ackHandlerBatch{nestedGPA: a.nested} },
@@ -118,19 +100,20 @@ func (a *ackHandler) UnmarshalPayload(data []byte) (MessagePayload, error) {
 	return msg, err
 }
 
-func (a *ackHandler) handleTickMsg(msg *ackHandlerTick) []MessageOut {
-	resendOlderThan := msg.timestamp.Add(-a.resendPeriod)
-	var resendMsgs []MessageOut
+func (a *ackHandler[NestedGPA]) Tick(timestamp time.Time) {
+	defer a.makeBatches()
+
+	resendOlderThan := timestamp.Add(-a.resendPeriod)
 	a.sentUnacked.ForEach(func(nodeID NodeID, nodeSentUnacked *shrinkingmap.ShrinkingMap[int, *ackHandlerBatch]) bool {
 		nodeSentUnacked.ForEach(func(batchID int, batch *ackHandlerBatch) bool {
-			if batch.sent == nil {
+			if batch.sent.IsZero() {
 				// Don't resend, just mark the current timestamp.
 				// We have sent it after the previous tick.
-				batch.sent = &msg.timestamp
+				batch.sent = timestamp
 			} else if batch.sent.Before(resendOlderThan) {
 				// Resend it, timeout is already passed.
-				batch.sent = &msg.timestamp
-				resendMsgs = append(resendMsgs, NewMessageOut(nodeID, batch))
+				batch.sent = timestamp
+				a.out.Put(NewMessageOut(nodeID, batch))
 			}
 			return true
 		})
@@ -138,16 +121,15 @@ func (a *ackHandler) handleTickMsg(msg *ackHandlerTick) []MessageOut {
 	})
 
 	a.initPending.ForEachKey(func(nodeID NodeID) bool {
-		resendMsgs = append(resendMsgs, NewMessageOut(nodeID, &ackHandlerReset{
+		a.out.Put(NewMessageOut(nodeID, &ackHandlerReset{
 			response: false,
 			latestID: 0,
 		}))
 		return true
 	})
-	return resendMsgs
 }
 
-func (a *ackHandler) handleResetMsg(msg TypedMessageIn[*ackHandlerReset]) []MessageOut {
+func (a *ackHandler[NestedGPA]) handleResetMsg(msg TypedMessageIn[*ackHandlerReset]) {
 	from := msg.Sender
 	if !msg.Payload.response {
 		maxID := 0
@@ -158,20 +140,20 @@ func (a *ackHandler) handleResetMsg(msg TypedMessageIn[*ackHandlerReset]) []Mess
 				}
 			}
 		}
-		return []MessageOut{NewMessageOut(msg.Sender, &ackHandlerReset{
+		a.out.Put(NewMessageOut(msg.Sender, &ackHandlerReset{
 			response: true,
 			latestID: maxID,
-		})}
+		}))
+		return
 	}
 	if ini, exists := a.initialized.Get(from); exists && ini {
-		return nil
+		return
 	}
 	a.counters.Set(msg.Sender, msg.Payload.latestID+1)
 	a.initialized.Set(msg.Sender, true)
-	return a.makeBatches(nil)
 }
 
-func (a *ackHandler) handleBatchMsg(msgBatch TypedMessageIn[*ackHandlerBatch]) []MessageOut {
+func (a *ackHandler[NestedGPA]) handleBatchMsg(msgBatch TypedMessageIn[*ackHandlerBatch]) {
 	//
 	// Process the received acknowledgements.
 	// Drop all the outgoing batches, that are now acknowledged.
@@ -184,7 +166,7 @@ func (a *ackHandler) handleBatchMsg(msgBatch TypedMessageIn[*ackHandlerBatch]) [
 	// Was that ack-only message?
 	if msgBatch.Payload.id == nil {
 		// That was ack-only batch, nothing more to do with it.
-		return nil
+		return
 	}
 
 	peerRecvAcksIn, _ := a.recvAcksIn.GetOrCreate(msgBatch.Sender, func() map[int]*int { return make(map[int]*int) })
@@ -195,12 +177,13 @@ func (a *ackHandler) handleBatchMsg(msgBatch TypedMessageIn[*ackHandlerBatch]) [
 		if batchAckedIn == nil {
 			// Not acknowledged yet, just send an ack-only message for now.
 			// The sender has already re-sent the message, so it waits for the ack.
-			return []MessageOut{NewMessageOut(msgBatch.Sender, &ackHandlerBatch{
+			a.out.Put(NewMessageOut(msgBatch.Sender, &ackHandlerBatch{
 				id:   nil,                         // That's ack-only.
 				msgs: nil,                         // No payload.
 				acks: []int{*msgBatch.Payload.id}, // Ack single message.
-				sent: nil,                         // We will not track this message, it has no payload.
-			})}
+				sent: time.Time{},                 // We will not track this message, it has no payload.
+			}))
+			return
 		}
 		//
 		// We have acked it already. If we have the batch with an ack, we
@@ -208,30 +191,28 @@ func (a *ackHandler) handleBatchMsg(msgBatch TypedMessageIn[*ackHandlerBatch]) [
 		// is outdated and can be ignored.
 		peerSentUnacked, exists := a.sentUnacked.Get(msgBatch.Sender)
 		if !exists {
-			return nil
+			return
 		}
 		ackedBatch, exists := peerSentUnacked.Get(*batchAckedIn)
 		if !exists {
-			return nil
+			return
 		}
-		now := time.Now()
-		ackedBatch.sent = &now
-		return []MessageOut{NewMessageOut(msgBatch.Sender, ackedBatch)}
+		ackedBatch.sent = time.Now()
+		a.out.Put(NewMessageOut(msgBatch.Sender, ackedBatch))
+		return
 	}
 	//
 	// That's a new batch, we have to process it.
-	var nestedMsgs []MessageOut
 	for _, p := range msgBatch.Payload.msgs {
-		nestedMsgs = slices.Concat(nestedMsgs, a.nested.Message(NewMessageIn(msgBatch.Sender, p)))
+		a.nested.Message(NewMessageIn(msgBatch.Sender, p))
 	}
 
 	sender, _ := a.recvAcksIn.GetOrCreate(msgBatch.Sender, func() map[int]*int { return make(map[int]*int) })
 	sender[*msgBatch.Payload.id] = nil
-
-	return a.makeBatches(nestedMsgs)
 }
 
-func (a *ackHandler) makeBatches(msgs []MessageOut) []MessageOut {
+func (a *ackHandler[NestedGPA]) makeBatches() {
+	msgs := a.nested.SwapOutBuffer()
 	groupedMsgs := lo.MapEntries(
 		lo.GroupBy(msgs, func(msg MessageOut) NodeID { return msg.Recipient }),
 		func(nodeID NodeID, msgsForNode []MessageOut) (NodeID, []MessagePayload) {
@@ -240,6 +221,12 @@ func (a *ackHandler) makeBatches(msgs []MessageOut) []MessageOut {
 			})
 		},
 	)
+
+	// send back messages going to self
+	for _, msg := range groupedMsgs[a.me] {
+		a.nested.Message(NewMessageIn(a.me, msg))
+	}
+	delete(groupedMsgs, a.me)
 
 	a.initPending.ForEach(func(nodeID NodeID, pending []MessagePayload) bool {
 		if gr, ok := groupedMsgs[nodeID]; ok {
@@ -251,12 +238,11 @@ func (a *ackHandler) makeBatches(msgs []MessageOut) []MessageOut {
 	})
 	a.initPending.Clear()
 
-	var batches []MessageOut
 	for nodeID, batchMsgs := range groupedMsgs {
 		if initialized, exists := a.initialized.Get(nodeID); !exists || !initialized {
 			pending, _ := a.initPending.GetOrCreate(nodeID, func() []MessagePayload { return make([]MessagePayload, 0, 1) })
 			a.initPending.Set(nodeID, append(pending, batchMsgs...))
-			batches = append(batches, NewMessageOut(nodeID, &ackHandlerReset{
+			a.out.Put(NewMessageOut(nodeID, &ackHandlerReset{
 				response: false,
 				latestID: 0,
 			}))
@@ -284,15 +270,14 @@ func (a *ackHandler) makeBatches(msgs []MessageOut) []MessageOut {
 			id:   &batchID,
 			acks: acks,
 			msgs: batchMsgs,
-			sent: nil, // Will be set after first resend, to avoid resend too early.
+			sent: time.Time{}, // Will be set after first resend, to avoid resend too early.
 		}
 		unackedMap, _ := a.sentUnacked.GetOrCreate(nodeID, func() *shrinkingmap.ShrinkingMap[int, *ackHandlerBatch] {
 			return shrinkingmap.New[int, *ackHandlerBatch]()
 		})
 		unackedMap.Set(*batch.id, batch)
-		batches = append(batches, NewMessageOut(nodeID, batch))
+		a.out.Put(NewMessageOut(nodeID, batch))
 	}
-	return batches
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -309,6 +294,10 @@ func (msg *ackHandlerReset) MsgType() MessageType {
 	return msgTypeAckHandlerReset
 }
 
+func (msg *ackHandlerReset) String() string {
+	return fmt.Sprintf("{ackHandlerReset response=%v latestID=%d}", msg.response, msg.latestID)
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // ackHandlerBatch
 
@@ -317,7 +306,7 @@ type ackHandlerBatch struct {
 	id        *int             // That's ACK only, if nil.
 	msgs      []MessagePayload // Messages in the batch.
 	acks      []int            // Acknowledged batches.
-	sent      *time.Time       // Transient, only used for outgoing messages, not sent to the outside.
+	sent      time.Time        // Transient, only used for outgoing messages, not sent to the outside.
 	nestedGPA GPA              // Transient, for un-marshaling only.
 }
 
@@ -368,10 +357,6 @@ func (msg *ackHandlerBatch) UnmarshalBCS(d *bcs.Decoder) error {
 	return nil
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// ackHandlerTick
-
-// Event representing a timer tick.
-type ackHandlerTick struct {
-	timestamp time.Time
+func (msg *ackHandlerBatch) String() string {
+	return fmt.Sprintf("{ackHandlerBatch id=%v msgs=%d acks=%v}", msg.id, len(msg.msgs), msg.acks)
 }

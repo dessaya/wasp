@@ -50,9 +50,7 @@ import (
 
 	"github.com/iotaledger/hive.go/ds/shrinkingmap"
 	"github.com/iotaledger/hive.go/log"
-
 	"github.com/iotaledger/wasp/v2/clients/iota-go/iotasigner"
-	"github.com/iotaledger/wasp/v2/packages/gpa"
 	"github.com/iotaledger/wasp/v2/packages/isc"
 )
 
@@ -63,35 +61,34 @@ type varLocalViewEntry struct {
 }
 
 type VarLocalView struct {
+	cl        *CommitteeLog
 	latestTip *isc.StateAnchor
 	// The latest confirmed Anchor, as received from L1.
 	// It can be nil, if the latest Anchor is unclear (either not received yet).
 	confirmedAnchor *isc.StateAnchor
 	// Transactions that are ready to be posted.
 	pendingTXes *shrinkingmap.ShrinkingMap[uint32, []*varLocalViewEntry]
-	// Callback for the TIP changes.
-	tipUpdatedCB func(ao *isc.StateAnchor) []gpa.MessageOut
 	// Just a logger.
 	log log.Logger
 }
 
-func NewVarLocalView(pipeliningLimit int, tipUpdatedCB func(ao *isc.StateAnchor) []gpa.MessageOut, log log.Logger) *VarLocalView {
+func NewVarLocalView(cl *CommitteeLog, pipeliningLimit int, log log.Logger) *VarLocalView {
 	log.LogDebugf("NewVarLocalView, pipeliningLimit=%v", pipeliningLimit)
 	return &VarLocalView{
+		cl:              cl,
 		latestTip:       nil,
 		confirmedAnchor: nil,
 		pendingTXes:     shrinkingmap.New[uint32, []*varLocalViewEntry](),
-		tipUpdatedCB:    tipUpdatedCB,
 		log:             log,
 	}
 }
 
-func (lvi *VarLocalView) AnchorConfirmed(confirmedAnchor *isc.StateAnchor) []gpa.MessageOut {
+func (lvi *VarLocalView) AnchorConfirmed(confirmedAnchor *isc.StateAnchor) {
 	lvi.confirmedAnchor = confirmedAnchor
-	return lvi.processIt()
+	lvi.processIt()
 }
 
-func (lvi *VarLocalView) TransactionProduced(logIndex LogIndex, consumedAnchor *isc.StateAnchor, tx *iotasigner.SignedTransaction) []gpa.MessageOut {
+func (lvi *VarLocalView) TransactionProduced(logIndex LogIndex, consumedAnchor *isc.StateAnchor, tx *iotasigner.SignedTransaction) {
 	stateIndex := consumedAnchor.GetStateIndex()
 	stateIndexEntries, _ := lvi.pendingTXes.GetOrCreate(stateIndex, func() []*varLocalViewEntry { return []*varLocalViewEntry{} })
 	contains := lo.ContainsBy(stateIndexEntries, func(entry *varLocalViewEntry) bool {
@@ -105,10 +102,10 @@ func (lvi *VarLocalView) TransactionProduced(logIndex LogIndex, consumedAnchor *
 		})
 		lvi.pendingTXes.Set(stateIndex, stateIndexEntries)
 	}
-	return lvi.processIt()
+	lvi.processIt()
 }
 
-func (lvi *VarLocalView) TransactionRejected(logIndex LogIndex) []gpa.MessageOut {
+func (lvi *VarLocalView) TransactionRejected(logIndex LogIndex) {
 	lvi.pendingTXes.ForEach(func(stateIndex uint32, entries []*varLocalViewEntry) bool {
 		entries = lo.Filter(entries, func(entry *varLocalViewEntry, index int) bool {
 			return entry.logIndex != logIndex
@@ -120,17 +117,17 @@ func (lvi *VarLocalView) TransactionRejected(logIndex LogIndex) []gpa.MessageOut
 		}
 		return true
 	})
-	return lvi.processIt()
+	lvi.processIt()
 }
 
 func (lvi *VarLocalView) StatusString() string {
 	return fmt.Sprintf("{varLocalView: confirmedAnchor=%v, |pendingTxIndexes|=%v}", lvi.confirmedAnchor, lvi.pendingTXes.Size())
 }
 
-func (lvi *VarLocalView) processIt() []gpa.MessageOut {
+func (lvi *VarLocalView) processIt() {
 	if lvi.confirmedAnchor == nil {
 		lvi.updateVal(nil)
-		return nil
+		return
 	}
 	confirmedStateIndex := lvi.confirmedAnchor.GetStateIndex()
 
@@ -145,19 +142,20 @@ func (lvi *VarLocalView) processIt() []gpa.MessageOut {
 
 	entries, found := lvi.pendingTXes.Get(confirmedStateIndex)
 	if found && len(entries) > 0 {
-		return lvi.updateVal(nil)
+		lvi.updateVal(nil)
 	}
 
-	return lvi.updateVal(lvi.confirmedAnchor)
+	lvi.updateVal(lvi.confirmedAnchor)
 }
 
-func (lvi *VarLocalView) updateVal(tip *isc.StateAnchor) []gpa.MessageOut {
+func (lvi *VarLocalView) updateVal(tip *isc.StateAnchor) {
 	if tip == nil && lvi.latestTip == nil {
-		return nil
+		return
 	}
 	if tip != nil && lvi.latestTip != nil && tip.GetObjectRef().Equals(lvi.latestTip.GetObjectRef()) {
-		return nil
+		return
 	}
 	lvi.latestTip = tip
-	return lvi.tipUpdatedCB(tip)
+	lvi.log.LogDebugf("Output received, %v", tip)
+	lvi.cl.varConsInsts.LatestL1Anchor(tip)
 }

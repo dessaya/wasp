@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/iotaledger/wasp/v2/clients/iota-go/iotago"
-	"github.com/iotaledger/wasp/v2/packages/gpa"
 	"github.com/iotaledger/wasp/v2/packages/isc"
 	"github.com/iotaledger/wasp/v2/packages/state"
 )
@@ -29,45 +28,45 @@ func NewSyncTX(c *Consensus) *SyncTX {
 	return &SyncTX{c: c}
 }
 
-func (sub *SyncTX) AnchorDecided(ao *isc.StateAnchor) []gpa.MessageOut {
+func (sub *SyncTX) AnchorDecided(ao *isc.StateAnchor) {
 	if sub.decidedAnchor != nil || ao == nil {
-		return nil
+		return
 	}
 	sub.decidedAnchor = ao
-	return sub.tryCompleteInputs()
+	sub.tryCompleteInputs()
 }
 
-func (sub *SyncTX) UnsignedTXReceived(unsignedTX *iotago.TransactionData) []gpa.MessageOut {
+func (sub *SyncTX) UnsignedTXReceived(unsignedTX *iotago.TransactionData) {
 	if sub.unsignedTX != nil || unsignedTX == nil {
-		return nil
+		return
 	}
 	sub.unsignedTX = unsignedTX
-	return sub.tryCompleteInputs()
+	sub.tryCompleteInputs()
 }
 
-func (sub *SyncTX) SignatureReceived(signature []byte) []gpa.MessageOut {
+func (sub *SyncTX) SignatureReceived(signature []byte) {
 	if sub.signature != nil || signature == nil {
-		return nil
+		return
 	}
 	sub.signature = signature
-	return sub.tryCompleteInputs()
+	sub.tryCompleteInputs()
 }
 
-func (sub *SyncTX) BlockSaved(block state.Block) []gpa.MessageOut {
+func (sub *SyncTX) BlockSaved(block state.Block) {
 	if sub.blockSaved {
-		return nil
+		return
 	}
 	sub.blockSaved = true
 	sub.block = block
-	return sub.tryCompleteInputs()
+	sub.tryCompleteInputs()
 }
 
-func (sub *SyncTX) tryCompleteInputs() []gpa.MessageOut {
+func (sub *SyncTX) tryCompleteInputs() {
 	if sub.inputsReady || sub.decidedAnchor == nil || sub.unsignedTX == nil || sub.signature == nil || !sub.blockSaved {
-		return nil
+		return
 	}
 	sub.inputsReady = true
-	return sub.c.uponTXInputsReady(sub.decidedAnchor, sub.unsignedTX, sub.block, sub.signature)
+	sub.c.uponTXInputsReady(sub.decidedAnchor, sub.unsignedTX, sub.block, sub.signature)
 }
 
 // String tries to provide useful human-readable compact status.

@@ -3,7 +3,6 @@ package inputs
 import (
 	"context"
 
-	"github.com/iotaledger/wasp/v2/packages/gpa"
 	"github.com/iotaledger/wasp/v2/packages/state"
 )
 
@@ -12,8 +11,6 @@ type ConsensusBlockProduced struct {
 	stateDraft state.StateDraft
 	resultCh   chan<- state.Block
 }
-
-var _ gpa.Input = &ConsensusBlockProduced{}
 
 func NewConsensusBlockProduced(ctx context.Context, stateDraft state.StateDraft) (*ConsensusBlockProduced, <-chan state.Block) {
 	resultChannel := make(chan state.Block, 1)

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
 	"go.dedis.ch/kyber/v3"
 	"go.dedis.ch/kyber/v3/sign/eddsa"
@@ -40,29 +41,30 @@ func TestBasic(t *testing.T) {
 		//
 		// Setup nodes.
 		distributedSignatures := map[gpa.NodeID]*distsign.DistributedSignature{}
-		gpas := map[gpa.NodeID]gpa.GPA{}
 		for _, nid := range nodeIDs {
 			distributedSignatures[nid] = distsign.New(suite, nodeIDs, nodePKs, f, nid, nodeSKs[nid], longTermSecretShares[nid], log)
-			gpas[nid] = distributedSignatures[nid].AsGPA()
 		}
-		tc := gpa.NewTestContext(gpas)
+		tc := gpa.NewTestContext(distributedSignatures)
 		//
 		// Run the DKG
-		inputs := make(map[gpa.NodeID]gpa.Input)
 		for _, nid := range nodeIDs {
-			inputs[nid] = distsign.NewInputStart() // Input is only a signal here.
+			distributedSignatures[nid].Start()
 		}
-		tc.WithInputs(inputs).WithInputProbability(0.01)
-		tc.RunUntil(tc.NumberOfOutputsPredicate(n - f))
+		tc.RunUntil(func() bool {
+			// at least n - f nodes have non-nil output
+			return lo.CountBy(
+				lo.Values(distributedSignatures),
+				func(n *distsign.DistributedSignature) bool { return n.Output() != nil },
+			) >= n-f
+		})
 		//
 		// Check the INTERMEDIATE result.
 		intermediateOutputs := map[gpa.NodeID]*distsign.Output{}
-		for nid := range gpas {
-			nodeOutput := gpas[nid].Output()
-			if nodeOutput == nil {
+		for nid := range distributedSignatures {
+			intermediateOutput := distributedSignatures[nid].Output()
+			if intermediateOutput == nil {
 				continue
 			}
-			intermediateOutput := nodeOutput.(*distsign.Output)
 			require.NotNil(tt, intermediateOutput)
 			require.NotNil(tt, intermediateOutput.ProposedIndexes)
 			require.Nil(tt, intermediateOutput.Signature)
@@ -77,23 +79,22 @@ func TestBasic(t *testing.T) {
 		}
 		messageToSign := []byte{112, 117, 116, 105, 110, 32, 99, 104, 117, 105, 108, 111}
 		for nid := range distributedSignatures {
-			tc.WithInput(nid, distsign.NewInputDecided(decidedProposals, messageToSign))
+			distributedSignatures[nid].InputDecided(decidedProposals, messageToSign)
 		}
 		//
 		// Run the ADKG with agreement already decided.
-		tc.WithInputProbability(0.001)
 		tc.RunUntil(tc.OutOfMessagesPredicate())
 		//
 		// Check the FINAL result.
 		var signature []byte
-		for _, n := range gpas {
+		for _, n := range distributedSignatures {
 			o := n.Output()
 			require.NotNil(tt, o)
-			require.NotNil(tt, o.(*distsign.Output).Signature)
+			require.NotNil(tt, o.Signature)
 			if signature == nil {
-				signature = o.(*distsign.Output).Signature
+				signature = o.Signature
 			}
-			require.True(tt, bytes.Equal(signature, o.(*distsign.Output).Signature))
+			require.True(tt, bytes.Equal(signature, o.Signature))
 		}
 		require.NoError(tt, eddsa.Verify(longTermPK, messageToSign, signature))
 	}

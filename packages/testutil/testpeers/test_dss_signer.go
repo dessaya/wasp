@@ -60,31 +60,33 @@ func (sig *testDssSigner) Sign(messageToSign []byte) (*cryptolib.Signature, erro
 	//
 	// Setup nodes.
 	distributedSignatures := map[gpa.NodeID]*distsign.DistributedSignature{}
-	gpas := map[gpa.NodeID]gpa.GPA{}
 	for idx, nid := range sig.nodeIDs {
 		dks := sig.dkShares[idx]
 		privKey := lo.Must(sig.nodeKeys[idx].GetPrivateKey().AsKyberKeyPair()).Private
 		distributedSignatures[nid] = distsign.New(edSuite, sig.nodeIDs, nodePKs, f, nid, privKey, dks.DSS(), sig.log)
-		gpas[nid] = distributedSignatures[nid].AsGPA()
 	}
-	tc := gpa.NewTestContext(gpas)
+	tc := gpa.NewTestContext(distributedSignatures)
 	//
 	// Run the DKG
-	inputs := make(map[gpa.NodeID]gpa.Input)
 	for _, nid := range sig.nodeIDs {
-		inputs[nid] = distsign.NewInputStart() // Input is only a signal here.
+		distributedSignatures[nid].Start()
 	}
-	tc.WithInputs(inputs).RunUntil(tc.NumberOfOutputsPredicate(n - f))
+	tc.RunUntil(func() bool {
+		// at least n - f nodes have non-nil output
+		return lo.CountBy(
+			lo.Values(distributedSignatures),
+			func(n *distsign.DistributedSignature) bool { return n.Output() != nil },
+		) >= n-f
+	})
+
 	//
 	// Check the INTERMEDIATE result.
 	intermediateOutputs := map[gpa.NodeID]*distsign.Output{}
-	for nid := range gpas {
-		nodeOutput := gpas[nid].Output()
-		if nodeOutput == nil {
-			continue
+	for nid := range distributedSignatures {
+		intermediateOutput := distributedSignatures[nid].Output()
+		if intermediateOutput != nil {
+			intermediateOutputs[nid] = intermediateOutput
 		}
-		intermediateOutput := nodeOutput.(*distsign.Output)
-		intermediateOutputs[nid] = intermediateOutput
 	}
 	//
 	// Emulate the agreement on index proposals (ACS).
@@ -93,17 +95,17 @@ func (sig *testDssSigner) Sign(messageToSign []byte) (*cryptolib.Signature, erro
 		decidedProposals[nid] = intermediateOutputs[nid].ProposedIndexes
 	}
 	for nid := range distributedSignatures {
-		tc.WithInput(nid, distsign.NewInputDecided(decidedProposals, messageToSign))
+		distributedSignatures[nid].InputDecided(decidedProposals, messageToSign)
 	}
 	//
 	// Run the ADKG with agreement already decided.
 	tc.RunUntil(tc.OutOfMessagesPredicate())
 	//
 	// Check the FINAL result.
-	for _, n := range gpas {
+	for _, n := range distributedSignatures {
 		o := n.Output()
 		if o != nil {
-			signatureBytes := o.(*distsign.Output).Signature
+			signatureBytes := o.Signature
 			signature := cryptolib.NewSignature(sig.dkShares[0].GetSharedPublic(), signatureBytes)
 			if !signature.Validate(messageToSign) {
 				return nil, fmt.Errorf("produced an invalid signature")

@@ -5,6 +5,7 @@ package acss_test
 
 import (
 	"math/rand"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -77,20 +78,24 @@ func genericTest(
 	faulty := nodeIDs[:silentNodes]
 	nodes := map[gpa.NodeID]gpa.GPA{}
 	for _, nid := range nodeIDs {
-		nodes[nid] = acss.New(suite, nodeIDs, nodePKs, f, nid, nodeSKs[nid], dealer, dealCB, log.NewChildLogger(nid.ShortString()))
-		if isNodeInList(nid, faulty) {
-			nodes[nid] = &silentNode{nested: nodes[nid]}
+		acssInst := acss.New(suite, nodeIDs, nodePKs, f, nid, nodeSKs[nid], dealer, dealCB, log.NewChildLogger(nid.ShortString()))
+		nodes[nid] = acssInst
+		if slices.Contains(faulty, nid) {
+			nodes[nid] = &silentNode{nested: acssInst}
+		}
+		if nid == dealer {
+			acssInst.Input(secretToShare)
 		}
 	}
-	gpa.NewTestContext(nodes).WithInputs(map[gpa.NodeID]gpa.Input{dealer: secretToShare}).RunAll()
+	gpa.NewTestContext(nodes).RunAll()
 	outPriShares := []*share.PriShare{}
-	for i, n := range nodes {
-		o := n.Output()
-		if !isNodeInList(i, faulty) {
+	for nid, n := range nodes {
+		if !slices.Contains(faulty, nid) {
+			o := n.(*acss.ACSS).Output()
 			require.NotNil(t, o)
-			require.NotNil(t, o.(*acss.Output).PriShare)
-			require.NotNil(t, o.(*acss.Output).Commits)
-			outPriShares = append(outPriShares, o.(*acss.Output).PriShare)
+			require.NotNil(t, o.PriShare)
+			require.NotNil(t, o.Commits)
+			outPriShares = append(outPriShares, o.PriShare)
 		}
 	}
 	outSecret, err := share.RecoverSecret(suite, outPriShares, f+1, n)
@@ -98,34 +103,22 @@ func genericTest(
 	require.True(t, outSecret.Equal(secretToShare))
 }
 
-func isNodeInList(n gpa.NodeID, list []gpa.NodeID) bool {
-	for i := range list {
-		if list[i] == n {
-			return true
-		}
-	}
-	return false
-}
-
 // silent node don't respond to any messages.
-// If it is the dealer, if performs the initial share.
 type silentNode struct {
-	nested gpa.GPA
+	nested *acss.ACSS
 }
 
 var _ gpa.GPA = &silentNode{}
 
-func (s *silentNode) Input(input gpa.Input) []gpa.MessageOut {
-	// Return the messages, if that's a dealer, otherwise the execution is not meaningful.
-	return s.nested.Input(input)
+func (s *silentNode) SwapOutBuffer() []gpa.MessageOut {
+	return s.nested.SwapOutBuffer()
 }
 
-func (s *silentNode) Message(msg gpa.MessageIn) []gpa.MessageOut {
+func (s *silentNode) Message(msg gpa.MessageIn) {
 	// Just drop all the received messages.
-	return nil
 }
 
-func (s *silentNode) Output() gpa.Output {
+func (s *silentNode) Output() *acss.Output {
 	return s.nested.Output()
 }
 

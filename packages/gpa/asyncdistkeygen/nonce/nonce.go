@@ -33,7 +33,6 @@ package nonce
 
 import (
 	"fmt"
-	"slices"
 	"sort"
 
 	"github.com/samber/lo"
@@ -55,23 +54,24 @@ type Output struct {
 	Threshold int
 }
 
-type nonceDistributedKeyGenerationImpl struct {
+type NonceDKG struct {
+	out       gpa.OutBuffer
 	suite     suites.Suite
 	n         int
 	f         int
 	me        gpa.NodeID
 	myIdx     int
 	nodeIDs   []gpa.NodeID
-	acss      []gpa.GPA
+	acss      []*acss.ACSS
 	st        map[int]*share.PriShare // > Let Si = {}; Ti = {}
 	stCommits map[int][]kyber.Point   // Commits for Si.
 	agreedT   []int                   // Output from the external consensus.
-	output    gpa.Output              // Output of the ADKG, can be intermediate (PriShare=nil).
+	output    *Output                 // Output of the ADKG, can be intermediate (PriShare=nil).
 	wrapper   *gpa.MsgWrapper
 	log       log.Logger
 }
 
-var _ gpa.GPA = &nonceDistributedKeyGenerationImpl{}
+var _ gpa.GPA = &NonceDKG{}
 
 const (
 	msgWrapperACSS byte = iota // subsystem code.
@@ -89,7 +89,7 @@ func New(
 	me gpa.NodeID,
 	mySK kyber.Scalar,
 	log log.Logger,
-) gpa.GPA {
+) *NonceDKG {
 	myIdx := -1
 	for i := range nodeIDs {
 		if nodeIDs[i] == me {
@@ -99,7 +99,7 @@ func New(
 	if myIdx == -1 {
 		panic("i'm not in the peer list")
 	}
-	n := &nonceDistributedKeyGenerationImpl{
+	n := &NonceDKG{
 		suite:     suite,
 		n:         len(nodeIDs),
 		f:         f,
@@ -115,45 +115,46 @@ func New(
 		log:       log,
 	}
 	n.wrapper = gpa.NewMsgWrapper(msgTypeWrapped, n.subsystemFunc)
-	n.acss = make([]gpa.GPA, len(nodeIDs))
+	n.acss = make([]*acss.ACSS, len(nodeIDs))
 	for i := range n.acss {
 		n.acss[i] = acss.New(suite, nodeIDs, peerPKs, f, me, mySK, nodeIDs[i], nil, log)
 	}
-	return gpa.NewOwnHandler(me, n)
+	return n
 }
 
-func (n *nonceDistributedKeyGenerationImpl) Input(input gpa.Input) []gpa.MessageOut {
-	switch input := input.(type) {
-	case *inputStart:
-		secret := n.suite.Scalar().Pick(n.suite.RandomStream())
-		msgs := n.wrapper.WrapMessagesOut(msgWrapperACSS, n.myIdx, n.acss[n.myIdx].Input(secret))
-		return slices.Concat(msgs, n.tryHandleACSSTermination(n.myIdx))
-	case *inputAgreementResult:
-		return n.handleAgreementResult(input)
-	}
-	panic(fmt.Errorf("unexpected input %T: %+v", input, input))
+func (n *NonceDKG) SwapOutBuffer() []gpa.MessageOut {
+	return n.out.Swap()
 }
 
-func (n *nonceDistributedKeyGenerationImpl) Message(msg gpa.MessageIn) []gpa.MessageOut {
+func (n *NonceDKG) Start() {
+	secret := n.suite.Scalar().Pick(n.suite.RandomStream())
+	n.acss[n.myIdx].Input(secret)
+	n.tryHandleACSSTermination(n.myIdx)
+}
+
+func (n *NonceDKG) AgreementResult(proposals map[gpa.NodeID][]int) {
+	n.handleAgreementResult(proposals)
+}
+
+func (n *NonceDKG) Message(msg gpa.MessageIn) {
 	switch msgT := msg.Payload.(type) {
 	case *gpa.WrappingMsg:
 		switch msgT.Subsystem() {
 		case msgWrapperACSS:
-			return n.handleACSSMessage(gpa.AsTypedMessageIn[*gpa.WrappingMsg](msg))
+			n.handleACSSMessage(gpa.AsTypedMessageIn[*gpa.WrappingMsg](msg))
 		default:
 			n.log.LogWarnf("unexpected message subsystem: %+v", msg)
-			return nil
 		}
 	default:
 		panic(fmt.Errorf("unexpected message: %+v", msg))
 	}
 }
 
-func (n *nonceDistributedKeyGenerationImpl) Output() gpa.Output {
+func (n *NonceDKG) Output() *Output {
 	return n.output
 }
 
-func (n *nonceDistributedKeyGenerationImpl) StatusString() string {
+func (n *NonceDKG) StatusString() string {
 	acssStats := ""
 	for i := range n.acss {
 		acssStats += "\n" + n.acss[i].StatusString()
@@ -161,30 +162,30 @@ func (n *nonceDistributedKeyGenerationImpl) StatusString() string {
 	return fmt.Sprintf("{ADKG:Nonce, acss: %s}", acssStats)
 }
 
-func (n *nonceDistributedKeyGenerationImpl) handleACSSMessage(msg gpa.TypedMessageIn[*gpa.WrappingMsg]) []gpa.MessageOut {
+func (n *NonceDKG) handleACSSMessage(msg gpa.TypedMessageIn[*gpa.WrappingMsg]) {
 	msgIndex := msg.Payload.Index()
-	msgsOut := n.acss[msgIndex].Message(msg.Payload.WrappedIn(msg.Sender))
-	wrappedMsgsOut := n.wrapper.WrapMessagesOut(msgWrapperACSS, msgIndex, msgsOut)
-	return slices.Concat(wrappedMsgsOut, n.tryHandleACSSTermination(msgIndex))
+	n.acss[msgIndex].Message(msg.Payload.WrappedIn(msg.Sender))
+	n.tryHandleACSSTermination(msgIndex)
 }
 
-func (n *nonceDistributedKeyGenerationImpl) tryHandleACSSTermination(acssIndex int) []gpa.MessageOut {
-	out := n.acss[acssIndex].Output()
-	if out != nil && n.st[acssIndex] == nil {
-		acssOutput, ok := out.(*acss.Output)
-		if !ok {
-			panic(fmt.Errorf("acss output wrong type: %+v", out))
-		}
-		return n.handleACSSOutput(acssIndex, acssOutput.PriShare, acssOutput.Commits)
+func (n *NonceDKG) tryHandleACSSTermination(acssIndex int) {
+	subMsgs, err := n.wrapper.WrapMessagesOut(msgWrapperACSS, acssIndex)
+	if err != nil {
+		panic(err)
 	}
-	return nil
+	n.out.PutAll(subMsgs)
+
+	acssOutput := n.acss[acssIndex].Output()
+	if acssOutput != nil && n.st[acssIndex] == nil {
+		n.handleACSSOutput(acssIndex, acssOutput.PriShare, acssOutput.Commits)
+	}
 }
 
-func (n *nonceDistributedKeyGenerationImpl) handleACSSOutput(index int, priShare *share.PriShare, commits []kyber.Point) []gpa.MessageOut {
+func (n *NonceDKG) handleACSSOutput(index int, priShare *share.PriShare, commits []kyber.Point) {
 	j := index
 	if _, ok := n.st[j]; ok {
 		// Already set. Ignore the duplicate messages.
-		return nil
+		return
 	}
 	n.st[j] = priShare
 	n.stCommits[j] = commits
@@ -199,19 +200,19 @@ func (n *nonceDistributedKeyGenerationImpl) handleACSSOutput(index int, priShare
 	//
 	// It is possible that the indexes are already decided and are waiting for the ACSS only.
 	// Thus we have to try produce the final output.
-	return n.tryMakeFinalOutput()
+	n.tryMakeFinalOutput()
 }
 
-func (n *nonceDistributedKeyGenerationImpl) handleAgreementResult(input *inputAgreementResult) []gpa.MessageOut {
+func (n *NonceDKG) handleAgreementResult(proposals map[gpa.NodeID][]int) {
 	if n.agreedT != nil {
-		return nil
+		return
 	}
 
-	if len(input.proposals) < n.n-n.f {
-		panic(fmt.Errorf("len(msg.proposals) < n.n - n.f, len=%v, n=%v, f=%v", len(input.proposals), n.n, n.f))
+	if len(proposals) < n.n-n.f {
+		panic(fmt.Errorf("len(msg.proposals) < n.n - n.f, len=%v, n=%v, f=%v", len(proposals), n.n, n.f))
 	}
 	voteCounts := make([]int, n.n)
-	for _, proposal := range input.proposals {
+	for _, proposal := range proposals {
 		if len(proposal) < n.f+1 {
 			n.log.LogWarn("len(proposal) < f+1, that should not happen")
 			continue
@@ -239,19 +240,19 @@ func (n *nonceDistributedKeyGenerationImpl) handleAgreementResult(input *inputAg
 		panic(fmt.Errorf("len(agreedT) < f+1, that should not happen, len=%v, f=%v", len(agreedT), n.f))
 	}
 	n.agreedT = agreedT
-	return n.tryMakeFinalOutput()
+	n.tryMakeFinalOutput()
 }
 
-func (n *nonceDistributedKeyGenerationImpl) tryMakeFinalOutput() []gpa.MessageOut {
+func (n *NonceDKG) tryMakeFinalOutput() {
 	if n.agreedT == nil {
-		return nil
+		return
 	}
 	var sumCommitPoly *share.PubPoly
 	sum := n.suite.Scalar().Zero()
 	for _, j := range n.agreedT {
 		if _, ok := n.st[j]; !ok {
 			n.log.LogDebugf("Don't have S/T[%v] yet, have to wait, agreedT=%+v, have S/T indexes: %v.", j, n.agreedT, lo.Keys(n.st))
-			return nil
+			return
 		}
 		sum.Add(sum.Clone(), n.st[j].V)
 		//
@@ -264,7 +265,7 @@ func (n *nonceDistributedKeyGenerationImpl) tryMakeFinalOutput() []gpa.MessageOu
 			sumCommitPoly, err = sumCommitPoly.Add(jCommitPoly)
 			if err != nil {
 				n.log.LogError("Unable to sum public commitments: %v", err)
-				return nil
+				return
 			}
 		}
 	}
@@ -276,5 +277,4 @@ func (n *nonceDistributedKeyGenerationImpl) tryMakeFinalOutput() []gpa.MessageOu
 		Commits:   sumCommit,
 		Threshold: n.n - n.f,
 	}
-	return nil
 }

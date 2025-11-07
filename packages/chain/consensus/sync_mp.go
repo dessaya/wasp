@@ -4,7 +4,6 @@
 package consensus
 
 import (
-	"github.com/iotaledger/wasp/v2/packages/gpa"
 	"github.com/iotaledger/wasp/v2/packages/isc"
 )
 
@@ -25,37 +24,37 @@ func NewSyncMempool(
 	}
 }
 
-func (s *SyncMempool) BaseAnchorReceived(baseAnchor *isc.StateAnchor) []gpa.MessageOut {
+func (s *SyncMempool) BaseAnchorReceived(baseAnchor *isc.StateAnchor) {
 	if s.baseAnchorReceived {
-		return nil
+		return
 	}
 	s.baseAnchor = baseAnchor
 	s.baseAnchorReceived = true
-	return s.c.uponMempoolProposalInputsReady(s.baseAnchor)
+	s.c.uponMempoolProposalInputsReady(s.baseAnchor)
 }
 
-func (s *SyncMempool) ProposalReceived(requestRefs []*isc.RequestRef) []gpa.MessageOut {
+func (s *SyncMempool) ProposalReceived(requestRefs []*isc.RequestRef) {
 	if s.proposalReceived {
-		return nil
+		return
 	}
 	s.proposalReceived = true
-	return s.c.uponMempoolProposalReceived(requestRefs)
+	s.c.uponMempoolProposalReceived(requestRefs)
 }
 
-func (s *SyncMempool) RequestsNeeded(requestRefs []*isc.RequestRef) []gpa.MessageOut {
+func (s *SyncMempool) RequestsNeeded(requestRefs []*isc.RequestRef) {
 	if s.requestsNeeded {
-		return nil
+		return
 	}
 	s.requestsNeeded = true
-	return s.c.uponMempoolRequestsNeeded(requestRefs)
+	s.c.uponMempoolRequestsNeeded(requestRefs)
 }
 
-func (s *SyncMempool) RequestsReceived(requests []isc.Request) []gpa.MessageOut {
+func (s *SyncMempool) RequestsReceived(requests []isc.Request) {
 	if s.requestsReceived {
-		return nil
+		return
 	}
 	s.requestsReceived = true
-	return s.c.uponMempoolRequestsReceived(requests)
+	s.c.uponMempoolRequestsReceived(requests)
 }
 
 // String tries to provide useful human-readable compact status.

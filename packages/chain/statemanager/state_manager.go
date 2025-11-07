@@ -81,10 +81,10 @@ func (r *reqPreliminaryBlock) Respond(err error) {
 type stateManager struct {
 	log                  log.Logger
 	chainID              isc.ChainID
-	stateManagerGPA      gpa.GPA
+	stateManagerGPA      *smgpa.StateManagerGPA
 	nodeRandomiser       utils.NodeRandomiser
 	nodeIDToPubKey       map[gpa.NodeID]*cryptolib.PublicKey
-	inputPipe            pipe.Pipe[gpa.Input]
+	inputPipe            pipe.Pipe[func()]
 	messagePipe          pipe.Pipe[*peering.PeerMessageIn]
 	nodePubKeysPipe      pipe.Pipe[*reqChainNodesUpdated]
 	preliminaryBlockPipe pipe.Pipe[*reqPreliminaryBlock]
@@ -135,7 +135,7 @@ func New(
 		chainID:              chainID,
 		stateManagerGPA:      stateManagerGPA,
 		nodeRandomiser:       nr,
-		inputPipe:            pipe.NewInfinitePipe[gpa.Input](),
+		inputPipe:            pipe.NewInfinitePipe[func()](),
 		messagePipe:          pipe.NewInfinitePipe[*peering.PeerMessageIn](),
 		nodePubKeysPipe:      pipe.NewInfinitePipe[*reqChainNodesUpdated](),
 		preliminaryBlockPipe: pipe.NewInfinitePipe[*reqPreliminaryBlock](),
@@ -189,7 +189,7 @@ func New(
 
 func (smT *stateManager) ChainFetchStateDiff(ctx context.Context, prevAnchor, nextAnchor *isc.StateAnchor) <-chan *inputs.ChainFetchStateDiffResults {
 	input, resultCh := inputs.NewChainFetchStateDiff(ctx, prevAnchor, nextAnchor)
-	smT.addInput(input)
+	smT.addInput(func() { smT.stateManagerGPA.InputChainFetchStateDiff(input) })
 	return resultCh
 }
 
@@ -218,20 +218,20 @@ func (smT *stateManager) PreliminaryBlock(block state.Block) error {
 // `nil` is sent via the returned channel upon successful retrieval of every block for anchor.
 func (smT *stateManager) ConsensusStateProposal(ctx context.Context, anchor *isc.StateAnchor) <-chan interface{} {
 	input, resultCh := inputs.NewConsensusStateProposal(ctx, anchor)
-	smT.addInput(input)
+	smT.addInput(func() { smT.stateManagerGPA.InputConsensusStateProposal(input) })
 	return resultCh
 }
 
 // ConsensusDecidedState asks State manager to return a virtual state with stateCommitment as its state commitment
 func (smT *stateManager) ConsensusDecidedState(ctx context.Context, anchor *isc.StateAnchor) <-chan state.State {
 	input, resultCh := inputs.NewConsensusDecidedState(ctx, anchor)
-	smT.addInput(input)
+	smT.addInput(func() { smT.stateManagerGPA.InputConsensusDecidedState(input) })
 	return resultCh
 }
 
 func (smT *stateManager) ConsensusProducedBlock(ctx context.Context, stateDraft state.StateDraft) <-chan state.Block {
 	input, resultCh := inputs.NewConsensusBlockProduced(ctx, stateDraft)
-	smT.addInput(input)
+	smT.addInput(func() { smT.stateManagerGPA.InputConsensusBlockProduced(input) })
 	return resultCh
 }
 
@@ -239,7 +239,7 @@ func (smT *stateManager) ConsensusProducedBlock(ctx context.Context, stateDraft 
 // Internal functions
 // -------------------------------------
 
-func (smT *stateManager) addInput(input gpa.Input) {
+func (smT *stateManager) addInput(input func()) {
 	smT.inputPipe.In() <- input
 }
 
@@ -304,9 +304,9 @@ func (smT *stateManager) run() {
 	}
 }
 
-func (smT *stateManager) handleInput(input gpa.Input) {
-	outMsgs := smT.stateManagerGPA.Input(input)
-	smT.sendMessages(outMsgs)
+func (smT *stateManager) handleInput(f func()) {
+	f()
+	smT.sendMessages(smT.stateManagerGPA.SwapOutBuffer())
 	smT.handleOutput()
 }
 
@@ -316,18 +316,18 @@ func (smT *stateManager) handleMessage(peerMsg *peering.PeerMessageIn) {
 		smT.log.LogWarnf("Parsing message failed: %v", err)
 		return
 	}
-	outMsgs := smT.stateManagerGPA.Message(gpa.NewMessageIn(gpa.NodeIDFromPublicKey(peerMsg.SenderPubKey), msg))
-	smT.sendMessages(outMsgs)
+	smT.stateManagerGPA.Message(gpa.NewMessageIn(gpa.NodeIDFromPublicKey(peerMsg.SenderPubKey), msg))
+	smT.sendMessages(smT.stateManagerGPA.SwapOutBuffer())
 	smT.handleOutput()
 }
 
 func (smT *stateManager) handleOutput() {
-	output := smT.stateManagerGPA.Output().(smgpa.StateManagerOutput)
+	output := smT.stateManagerGPA.Output()
 	for _, snapshotInfo := range output.TakeBlocksCommitted() {
 		smT.snapshotManager.BlockCommittedAsync(snapshotInfo)
 	}
-	for _, input := range output.TakeNextInputs() {
-		smT.addInput(input)
+	for _, input := range output.TakeBlocksToCommit() {
+		smT.addInput(func() { smT.stateManagerGPA.InputStateManagerBlocksToCommit(input) })
 	}
 }
 
@@ -382,7 +382,7 @@ func (smT *stateManager) handlePreliminaryBlock(msg *reqPreliminaryBlock) {
 }
 
 func (smT *stateManager) handleTimerTick(now time.Time) {
-	smT.handleInput(inputs.NewStateManagerTimerTick(now))
+	smT.handleInput(func() { smT.stateManagerGPA.InputStateManagerTimerTick(now) })
 }
 
 func (smT *stateManager) sendMessages(outMsgs []gpa.MessageOut) {

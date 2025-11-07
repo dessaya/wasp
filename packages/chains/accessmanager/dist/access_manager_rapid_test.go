@@ -37,8 +37,8 @@ type accessMgrSM struct {
 	genChainID      *rapid.Generator[isc.ChainID]
 	//
 	// These are set up for each scenario.
-	tc      *gpa.TestContext
-	nodes   map[gpa.NodeID]gpa.GPA
+	tc      *gpa.TestContext[*dist.AccessMgrDist]
+	nodes   map[gpa.NodeID]*dist.AccessMgrDist
 	servers map[gpa.NodeID]map[isc.ChainID][]*cryptolib.PublicKey
 	//
 	// Model.
@@ -71,7 +71,7 @@ func newAccessMgrSM(t *rapid.T, nodeCount, chainCount int) *accessMgrSM {
 	}
 
 	sm.servers = map[gpa.NodeID]map[isc.ChainID][]*cryptolib.PublicKey{}
-	sm.nodes = map[gpa.NodeID]gpa.GPA{}
+	sm.nodes = map[gpa.NodeID]*dist.AccessMgrDist{}
 	for _, nid := range sm.nodeIDs {
 		sm.servers[nid] = map[isc.ChainID][]*cryptolib.PublicKey{}
 		for _, chainID := range sm.chainIDs {
@@ -86,7 +86,7 @@ func newAccessMgrSM(t *rapid.T, nodeCount, chainCount int) *accessMgrSM {
 			},
 			func(pk *cryptolib.PublicKey) {},
 			sm.log.NewChildLogger(nid.ShortString()),
-		).AsGPA()
+		)
 	}
 	sm.tc = gpa.NewTestContext(sm.nodes)
 
@@ -108,7 +108,8 @@ func newAccessMgrSM(t *rapid.T, nodeCount, chainCount int) *accessMgrSM {
 func (sm *accessMgrSM) InputTrustedNodes(t *rapid.T) {
 	nodeID := sm.genNodeID.Draw(t, "nodeID")
 	trustedNodes := sm.genNodePubSlice.Draw(t, "trustedNodes")
-	sm.tc.WithInput(nodeID, dist.NewInputTrustedNodes(trustedNodes)).RunAll()
+	sm.nodes[nodeID].UpdateTrustedNodes(trustedNodes)
+	sm.tc.RunAll()
 	sm.mTrusted[nodeID] = trustedNodes
 }
 
@@ -116,7 +117,8 @@ func (sm *accessMgrSM) InputAccessNodes(t *rapid.T) {
 	nodeID := sm.genNodeID.Draw(t, "nodeID")
 	chainID := sm.genChainID.Draw(t, "chainID")
 	accessNodes := sm.genNodePubSlice.Draw(t, "accessNodes")
-	sm.tc.WithInput(nodeID, dist.NewInputAccessNodes(chainID, accessNodes)).RunAll()
+	sm.nodes[nodeID].UpdateAccessNodes(chainID, accessNodes)
+	sm.tc.RunAll()
 	sm.mActive[nodeID][chainID] = true
 	sm.mAccess[nodeID][chainID] = accessNodes
 }
@@ -124,7 +126,8 @@ func (sm *accessMgrSM) InputAccessNodes(t *rapid.T) {
 func (sm *accessMgrSM) InputChainDisabled(t *rapid.T) {
 	nodeID := sm.genNodeID.Draw(t, "nodeID")
 	chainID := sm.genChainID.Draw(t, "chainID")
-	sm.tc.WithInput(nodeID, dist.NewInputChainDisabled(chainID)).RunAll()
+	sm.nodes[nodeID].DisableChain(chainID)
+	sm.tc.RunAll()
 	sm.mActive[nodeID][chainID] = false
 }
 
@@ -140,16 +143,16 @@ func (sm *accessMgrSM) Reboot(t *rapid.T) {
 		},
 		func(pk *cryptolib.PublicKey) {},
 		sm.log.NewChildLogger(nodeID.ShortString()),
-	).AsGPA()
+	)
 	//
 	// Re-initialize all the persistent info: access information, active chains, trusted nodes.
 	// But the servers are not restored here. The algorithm has to restore that.
-	sm.tc.WithInput(nodeID, dist.NewInputTrustedNodes(sm.mTrusted[nodeID]))
+	sm.nodes[nodeID].UpdateTrustedNodes(sm.mTrusted[nodeID])
 	for _, chainID := range sm.chainIDs {
 		if !sm.mActive[nodeID][chainID] {
 			continue
 		}
-		sm.tc.WithInput(nodeID, dist.NewInputAccessNodes(chainID, sm.mAccess[nodeID][chainID]))
+		sm.nodes[nodeID].UpdateAccessNodes(chainID, sm.mAccess[nodeID][chainID])
 	}
 	sm.tc.RunAll()
 }

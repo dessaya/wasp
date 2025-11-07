@@ -11,7 +11,7 @@ const (
 	msgTypeRBCCEPayload
 )
 
-func (a *acssImpl) UnmarshalPayload(data []byte) (gpa.MessagePayload, error) {
+func (a *ACSS) UnmarshalPayload(data []byte) (gpa.MessagePayload, error) {
 	return gpa.UnmarshalPayload(data, gpa.PayloadAllocator{
 		msgTypeImplicateRecover: func() gpa.MessagePayload { return new(msgImplicateRecover) },
 		msgTypeVote:             func() gpa.MessagePayload { return new(msgVote) },

@@ -30,7 +30,7 @@ func testBasic(t *testing.T, n, cmtN, cmtF int) {
 
 	recv := map[gpa.NodeID]isc.Request{}
 	nodeIDs := gpa.MakeTestNodeIDs(n)
-	nodes := map[gpa.NodeID]gpa.GPA{}
+	nodes := map[gpa.NodeID]*distsync.MempoolSync{}
 	for _, nid := range nodeIDs {
 		thisNodeID := nid
 		requestNeededCB := func(*isc.RequestRef) isc.Request {
@@ -66,25 +66,25 @@ func testBasic(t *testing.T, n, cmtN, cmtF int) {
 	//
 	// Setup the committee for all nodes.
 	for _, nid := range nodeIDs {
-		tc.WithInput(nid, distsync.NewInputServerNodes(committeeNodes, committeeNodes))
+		nodes[nid].InputServerNodes(committeeNodes, committeeNodes)
 	}
 	//
 	// Send a request to a single node.
-	tc.WithInput(nodeIDs[rand.Intn(n)], distsync.NewInputPublishRequest(req))
+	nodes[nodeIDs[rand.Intn(n)]].InputPublishRequest(req)
 	tc.RunAll()
 	require.GreaterOrEqual(t, len(recv), cmtF+1)
 	//
 	// All nodes asks for the req.
 	ctx := context.Background()
 	for _, nid := range nodeIDs {
-		tc.WithInput(nid, distsync.NewInputRequestNeeded(ctx, reqRef))
+		nodes[nid].InputRequestNeeded(ctx, reqRef)
 	}
 	tc.RunAll()
 	require.Equal(t, len(recv), n)
 	//
 	// Some time ticks (just to check if not crashes.)
 	for _, nid := range nodeIDs {
-		tc.WithInput(nid, distsync.NewInputTimeTick())
+		nodes[nid].InputTimeTick()
 	}
 	tc.RunAll()
 }

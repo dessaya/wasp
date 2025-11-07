@@ -148,7 +148,7 @@ func testConsBasic(t *testing.T, n, f int) {
 	chainStates := map[gpa.NodeID]state.Store{}
 	procConfig := coreprocessors.NewConfig()
 	nodeIDs := gpa.NodeIDsFromPublicKeys(testpeers.PublicKeys(peerIdentities))
-	nodes := map[gpa.NodeID]gpa.GPA{}
+	nodes := map[gpa.NodeID]*consensus.Consensus{}
 	for i, nid := range nodeIDs {
 		nodeLog := log.NewChildLogger(nid.ShortString())
 		nodeSK := peerIdentities[i].GetPrivateKey()
@@ -169,31 +169,30 @@ func testConsBasic(t *testing.T, n, f int) {
 			gpa.NodeIDFromPublicKey,
 			accounts.CommonAccount(),
 			nodeLog,
-		).AsGPA()
+		)
 	}
 	tc := gpa.NewTestContext(nodes)
 	//
 	// Provide inputs.
 	t.Log("############ Provide Inputs.")
 	now := time.Now()
-	inputs := map[gpa.NodeID]gpa.Input{}
 	for _, nid := range nodeIDs {
-		inputs[nid] = consensus.NewInputProposal(stateAnchor0)
+		nodes[nid].InputProposal(stateAnchor0)
 	}
-	tc.WithInputs(inputs).RunAll()
+	tc.RunAll()
 	tc.PrintAllStatusStrings("After Inputs", t.Logf)
 	//
 	// Provide SM and MP responses on proposals (and time data).
 	t.Log("############ Provide TimeData and Proposals from SM/MP.")
 	for nid, node := range nodes {
-		out := node.Output().(*consensus.Output)
+		out := node.Output()
 		require.Equal(t, consensus.Running, out.Status)
 		require.NotNil(t, out.NeedMempoolProposal)
 		require.NotNil(t, out.NeedStateMgrStateProposal)
-		tc.WithInput(nid, consensus.NewInputMempoolProposal(reqRefs))
-		tc.WithInput(nid, consensus.NewInputStateMgrProposalConfirmed())
-		tc.WithInput(nid, consensus.NewInputTimeData(now))
-		tc.WithInput(nid, consensus.NewInputL1Info([]*coin.CoinWithRef{&gasCoin}, parameterstest.L1Mock))
+		nodes[nid].InputMempoolProposal(reqRefs)
+		nodes[nid].InputStateMgrProposalConfirmed()
+		nodes[nid].InputTimeData(now)
+		nodes[nid].InputL1Info([]*coin.CoinWithRef{&gasCoin}, parameterstest.L1Mock)
 	}
 	tc.RunAll()
 	tc.PrintAllStatusStrings("After MP/SM proposals", t.Logf)
@@ -201,7 +200,7 @@ func testConsBasic(t *testing.T, n, f int) {
 	// Provide Decided data from SM and MP.
 	t.Log("############ Provide Decided Data from SM/MP.")
 	for nid, node := range nodes {
-		out := node.Output().(*consensus.Output)
+		out := node.Output()
 		require.Equal(t, consensus.Running, out.Status)
 		require.Nil(t, out.NeedMempoolProposal)
 		require.Nil(t, out.NeedStateMgrStateProposal)
@@ -211,8 +210,8 @@ func testConsBasic(t *testing.T, n, f int) {
 		require.NoError(t, err)
 		chainState, err := chainStates[nid].StateByTrieRoot(l1Commitment.TrieRoot())
 		require.NoError(t, err)
-		tc.WithInput(nid, consensus.NewInputMempoolRequests(reqs))
-		tc.WithInput(nid, consensus.NewInputStateMgrDecidedVirtualState(chainState))
+		nodes[nid].InputMempoolRequests(reqs)
+		nodes[nid].InputStateMgrDecidedVirtualState(chainState)
 	}
 	tc.RunAll()
 	tc.PrintAllStatusStrings("After MP/SM data", t.Logf)
@@ -220,7 +219,7 @@ func testConsBasic(t *testing.T, n, f int) {
 	// Provide Decided data from SM and MP.
 	t.Log("############ Run VM, validate the result.")
 	for nid, node := range nodes {
-		out := node.Output().(*consensus.Output)
+		out := node.Output()
 		require.Equal(t, consensus.Running, out.Status)
 		require.Nil(t, out.NeedMempoolProposal)
 		require.Nil(t, out.NeedStateMgrStateProposal)
@@ -230,7 +229,7 @@ func testConsBasic(t *testing.T, n, f int) {
 		out.NeedVMResult.Log = hivelog.NewLogger(hivelog.WithLevel(hivelog.LevelError)) // Decrease VM logging.
 		vmResult, err := vmimpl.Run(out.NeedVMResult)
 		require.NoError(t, err)
-		tc.WithInput(nid, consensus.NewInputVMResult(vmResult))
+		nodes[nid].InputVMResult(vmResult)
 	}
 	tc.RunAll()
 	//
@@ -238,7 +237,7 @@ func testConsBasic(t *testing.T, n, f int) {
 	t.Log("############ After VM the VM Run.")
 	tc.PrintAllStatusStrings("After VM the VM Run", t.Logf)
 	for nid, node := range nodes {
-		out := node.Output().(*consensus.Output)
+		out := node.Output()
 		require.Equal(t, consensus.Running, out.Status)
 		require.Nil(t, out.NeedMempoolProposal)
 		require.Nil(t, out.NeedStateMgrStateProposal)
@@ -248,14 +247,14 @@ func testConsBasic(t *testing.T, n, f int) {
 		require.NotNil(t, out.NeedStateMgrSaveBlock)
 		block, _, _ := lo.Must3(chainStates[nid].Commit(out.NeedStateMgrSaveBlock))
 		require.NotNil(t, block)
-		tc.WithInput(nid, consensus.NewInputStateMgrBlockSaved(block))
+		nodes[nid].InputStateMgrBlockSaved(block)
 	}
 	tc.RunAll()
 	t.Log("############ All should be done now.")
 	tc.PrintAllStatusStrings("All done.", t.Logf)
-	out0 := nodes[nodeIDs[0]].Output().(*consensus.Output)
+	out0 := nodes[nodeIDs[0]].Output()
 	for _, node := range nodes {
-		out := node.Output().(*consensus.Output)
+		out := node.Output()
 		require.Equal(t, consensus.Completed, out.Status)
 		require.True(t, out.Terminated)
 		require.Nil(t, out.NeedMempoolProposal)

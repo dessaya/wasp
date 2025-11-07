@@ -6,6 +6,7 @@ package nonce_test
 import (
 	"testing"
 
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
 	"go.dedis.ch/kyber/v3"
 	"go.dedis.ch/kyber/v3/share"
@@ -34,28 +35,28 @@ func TestBasic(t *testing.T) {
 		}
 		//
 		// Setup nodes.
-		nodes := map[gpa.NodeID]gpa.GPA{}
+		nodes := map[gpa.NodeID]*nonce.NonceDKG{}
 		for _, nid := range nodeIDs {
 			nodes[nid] = nonce.New(suite, nodeIDs, nodePKs, f, nid, nodeSKs[nid], log)
+			// call start with tc.WithInputProbability(0.01)
+			nodes[nid].Start()
 		}
 		tc := gpa.NewTestContext(nodes)
-		//
-		// Run the DKG
-		inputs := make(map[gpa.NodeID]gpa.Input)
-		for _, nid := range nodeIDs {
-			inputs[nid] = nonce.NewInputStart() // Input is only a signal here.
-		}
-		tc.WithInputs(inputs).WithInputProbability(0.01)
-		tc.RunUntil(tc.NumberOfOutputsPredicate(n - f))
+		tc.RunUntil(func() bool {
+			numOuts := lo.CountBy(lo.Values(nodes), func(n *nonce.NonceDKG) bool {
+				return n.Output() != nil
+			})
+			return numOuts >= n-f
+		})
+
 		//
 		// Check the INTERMEDIATE result.
 		intermediateOutputs := map[gpa.NodeID]*nonce.Output{}
 		for nid, node := range nodes {
-			nodeOutput := node.Output()
-			if nodeOutput == nil {
+			intermediateOutput := node.Output()
+			if intermediateOutput == nil {
 				continue
 			}
-			intermediateOutput := nodeOutput.(*nonce.Output)
 			require.NotNil(tt, intermediateOutput)
 			require.NotNil(tt, intermediateOutput.Indexes)
 			require.Len(tt, intermediateOutput.Indexes, n-f)
@@ -72,9 +73,8 @@ func TestBasic(t *testing.T) {
 		//
 		// Run the ADKG with agreement already decided.
 		for _, nid := range nodeIDs {
-			tc.WithInput(nid, nonce.NewInputAgreementResult(decidedProposals))
+			nodes[nid].AgreementResult(decidedProposals)
 		}
-		tc.WithInputProbability(0.001)
 		tc.RunUntil(tc.OutOfMessagesPredicate())
 		//
 		// Check the FINAL result.
@@ -84,13 +84,13 @@ func TestBasic(t *testing.T) {
 		for nid, n := range nodes {
 			o := n.Output()
 			require.NotNil(tt, o)
-			require.NotNil(tt, o.(*nonce.Output).PubKey)
-			require.NotNil(tt, o.(*nonce.Output).PriShare)
-			require.NotNil(tt, o.(*nonce.Output).Commits)
-			priShares[nid] = o.(*nonce.Output).PriShare
+			require.NotNil(tt, o.PubKey)
+			require.NotNil(tt, o.PriShare)
+			require.NotNil(tt, o.Commits)
+			priShares[nid] = o.PriShare
 			if pubKey == nil && commits == nil {
-				pubKey = o.(*nonce.Output).PubKey
-				commits = o.(*nonce.Output).Commits
+				pubKey = o.PubKey
+				commits = o.Commits
 			}
 		}
 		asyncdistkeygen.VerifyPriShares(t, suite, nodeIDs, nodePKs, nodeSKs, pubKey, priShares, commits, f)

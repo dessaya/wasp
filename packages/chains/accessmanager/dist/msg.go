@@ -11,7 +11,7 @@ const (
 	msgTypeAccess gpa.MessageType = iota
 )
 
-func (amd *accessMgrDist) UnmarshalPayload(data []byte) (gpa.MessagePayload, error) {
+func (amd *AccessMgrDist) UnmarshalPayload(data []byte) (gpa.MessagePayload, error) {
 	return gpa.UnmarshalPayload(data, gpa.PayloadAllocator{
 		msgTypeAccess: func() gpa.MessagePayload { return new(msgAccess) },
 	})
