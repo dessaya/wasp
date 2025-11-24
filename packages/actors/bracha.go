@@ -1,0 +1,181 @@
+// Copyright 2020 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
+package actors
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	"github.com/iotaledger/wasp/v2/packages/hashing"
+)
+
+// ReliableBroadcast implements Bracha's Reliable Broadcast.
+// The original version of this RBC can be found here (see "FIG. 1. The broadcast primitive"):
+//
+//	Gabriel Bracha. 1987. Asynchronous byzantine agreement protocols. Inf. Comput.
+//	75, 2 (November 1, 1987), 130–143. DOI:https://doi.org/10.1016/0890-5401(87)90054-X
+//
+// Here we follow the algorithm presentation from (see "Algorithm 2 Bracha’s RBC [14]"):
+//
+//	Sourav Das, Zhuolun Xiang, and Ling Ren. 2021. Asynchronous Data Dissemination
+//	and its Applications. In Proceedings of the 2021 ACM SIGSAC Conference on Computer
+//	and Communications Security (CCS '21). Association for Computing Machinery,
+//	New York, NY, USA, 2705–2721. DOI:https://doi.org/10.1145/3460120.3484808
+//
+// The algorithms differs a bit. The latter supports predicates and also it don't
+// imply sending ECHO messages upon receiving F+1 READY messages. The pseudo-code
+// from the Das et al.:
+//
+//	01: // only broadcaster node
+//	02: input 𝑀
+//	03: send ⟨PROPOSE, 𝑀⟩ to all
+//	04: // all nodes
+//	05: input 𝑃(·) // predicate 𝑃(·) returns true unless otherwise specified.
+//	06: upon receiving ⟨PROPOSE, 𝑀⟩ from the broadcaster do
+//	07:     if 𝑃(𝑀) then
+//	08:         send ⟨ECHO, 𝑀⟩ to all
+//	09: upon receiving 2𝑡 + 1 ⟨ECHO, 𝑀⟩ messages and not having sent a READY message do
+//	10:     send ⟨READY, 𝑀⟩ to all
+//	11: upon receiving 𝑡 + 1 ⟨READY, 𝑀⟩ messages and not having sent a READY message do
+//	12:     send ⟨READY, 𝑀⟩ to all
+//	13: upon receiving 2𝑡 + 1 ⟨READY, 𝑀⟩ messages do
+//	14:     output 𝑀
+//
+// In the above 𝑡 is "Given a network of 𝑛 nodes, of which up to 𝑡 could be malicious",
+// thus that's the parameter F in the specification below.
+type ReliableBroadcast struct {
+	endpoint    *Endpoint
+	f           int
+	broadcaster NodeID
+	log         *slog.Logger
+}
+
+type (
+	msgPropose struct {
+		m []byte `bcs:"export"`
+	}
+	msgEcho struct {
+		m []byte `bcs:"export"`
+	}
+	msgReady struct {
+		m []byte `bcs:"export"`
+	}
+)
+
+func (m *msgPropose) MsgType() MessageType { return 0 }
+func (m *msgPropose) String() string       { return fmt.Sprintf("PROPOSE(%q)", m.m) }
+func (m *msgEcho) MsgType() MessageType    { return 1 }
+func (m *msgEcho) String() string          { return fmt.Sprintf("ECHO(%q)", m.m) }
+func (m *msgReady) MsgType() MessageType   { return 2 }
+func (m *msgReady) String() string         { return fmt.Sprintf("READY(%q)", m.m) }
+
+func NewReliableBroadcast(
+	endpoint *Endpoint,
+	f int,
+	broadcaster NodeID,
+	log *slog.Logger,
+) *ReliableBroadcast {
+	return &ReliableBroadcast{
+		endpoint:    endpoint,
+		f:           f,
+		broadcaster: broadcaster,
+		log:         log,
+	}
+}
+
+func (r *ReliableBroadcast) Endpoint() *Endpoint {
+	return r.endpoint
+}
+
+// Broadcast implements the reliable broadcast algorithm from the broadcaster's side.
+func (r *ReliableBroadcast) Broadcast(ctx context.Context, m []byte) (output []byte, err error) {
+	//	01: // only broadcaster node
+	//	02: input 𝑀
+	//	03: send ⟨PROPOSE, 𝑀⟩ to all
+	if r.endpoint.Me() != r.broadcaster {
+		panic("only broadcaster can call Broadcast")
+	}
+	if err := r.endpoint.SendToAll(ctx, &msgPropose{m: m}); err != nil {
+		return nil, err
+	}
+	return r.Receive(ctx)
+}
+
+// Receive implements the reliable broadcast algorithm for all nodes.
+func (r *ReliableBroadcast) Receive(ctx context.Context) (output []byte, err error) {
+	defer r.endpoint.Close()
+
+	readySent := false
+
+	echoCounters := make(map[hashing.HashValue]map[NodeID]bool)
+	readyCounters := make(map[hashing.HashValue]map[NodeID]bool)
+	counter := func(m map[hashing.HashValue]map[NodeID]bool, v []byte) map[NodeID]bool {
+		hash := hashing.HashData(v)
+		c := m[hash]
+		if c == nil {
+			c = make(map[NodeID]bool)
+			m[hash] = c
+		}
+		return c
+	}
+
+	for {
+		msg, err := r.endpoint.Receive(ctx)
+		if err != nil {
+			return nil, err
+		}
+		switch payload := msg.Payload.(type) {
+		//	06: upon receiving ⟨PROPOSE, 𝑀⟩ from the broadcaster do
+		//	07:     if 𝑃(𝑀) then // (ignoring predicate in this implementation)
+		//	08:         send ⟨ECHO, 𝑀⟩ to all
+		case *msgPropose:
+			if msg.Sender != r.broadcaster {
+				r.log.Warn("RBC: ignoring PROPOSE from non-broadcaster", "sender", msg.Sender.String())
+				continue
+			}
+			if err := r.endpoint.SendToAll(ctx, &msgEcho{m: payload.m}); err != nil {
+				return nil, err
+			}
+
+		//	09: upon receiving 2𝑡 + 1 ⟨ECHO, 𝑀⟩ messages and not having sent a READY message do
+		//	10:     send ⟨READY, 𝑀⟩ to all
+		case *msgEcho:
+			echoReceived := counter(echoCounters, payload.m)
+			if !echoReceived[msg.Sender] {
+				echoReceived[msg.Sender] = true
+				if len(echoReceived) == 2*r.f+1 && !readySent {
+					if err := r.endpoint.SendToAll(ctx, &msgReady{m: payload.m}); err != nil {
+						return nil, err
+					}
+					readySent = true
+				}
+			}
+
+		//	11: upon receiving 𝑡 + 1 ⟨READY, 𝑀⟩ messages and not having sent a READY message do
+		//	12:     send ⟨READY, 𝑀⟩ to all
+		//	13: upon receiving 2𝑡 + 1 ⟨READY, 𝑀⟩ messages do
+		//	14:     output 𝑀
+		case *msgReady:
+			readyReceived := counter(readyCounters, payload.m)
+			if !readyReceived[msg.Sender] {
+				readyReceived[msg.Sender] = true
+				switch len(readyReceived) {
+				case 2*r.f + 1:
+					return payload.m, nil
+				case r.f + 1:
+					if !readySent {
+						if err := r.endpoint.SendToAll(ctx, &msgReady{m: payload.m}); err != nil {
+							return nil, err
+						}
+						readySent = true
+					}
+				}
+			}
+
+		default:
+			r.log.Warn("ReliableBroadcast: unexpected message", "type", msg.Payload.MsgType(), "sender", msg.Sender.String())
+		}
+	}
+}
