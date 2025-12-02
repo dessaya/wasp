@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/samber/lo"
+
 	"github.com/iotaledger/wasp/v2/packages/hashing"
 )
 
@@ -65,11 +67,11 @@ type (
 )
 
 func (m *msgPropose) MsgType() MessageType { return 0 }
-func (m *msgPropose) String() string       { return fmt.Sprintf("PROPOSE(%q)", m.m) }
+func (m *msgPropose) String() string       { return fmt.Sprintf("PROPOSE(%q)", lo.Ellipsis(string(m.m), 16)) }
 func (m *msgEcho) MsgType() MessageType    { return 1 }
-func (m *msgEcho) String() string          { return fmt.Sprintf("ECHO(%q)", m.m) }
+func (m *msgEcho) String() string          { return fmt.Sprintf("ECHO(%q)", lo.Ellipsis(string(m.m), 16)) }
 func (m *msgReady) MsgType() MessageType   { return 2 }
-func (m *msgReady) String() string         { return fmt.Sprintf("READY(%q)", m.m) }
+func (m *msgReady) String() string         { return fmt.Sprintf("READY(%q)", lo.Ellipsis(string(m.m), 16)) }
 
 func NewReliableBroadcast(
 	endpoint *Endpoint,

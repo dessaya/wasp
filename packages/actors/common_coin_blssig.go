@@ -41,7 +41,9 @@ type msgCCSigShare struct {
 }
 
 func (m *msgCCSigShare) MsgType() MessageType { return 0 }
-func (m *msgCCSigShare) String() string       { return fmt.Sprintf("SIG_SHARE(%x)", m.s) }
+func (m *msgCCSigShare) String() string {
+	return fmt.Sprintf("SIG_SHARE(%x)", lo.Ellipsis(string(m.s), 16))
+}
 
 // NewCommonCoinBLSSig constructs a new common coin actor.
 func NewCommonCoinBLSSig(

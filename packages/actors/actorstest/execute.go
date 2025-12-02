@@ -50,12 +50,14 @@ type Stats struct {
 	Delivered int
 }
 
-// Execute delivers messages between actors until all Endpoints are closed or the test context is done
-func Execute(t *testing.T, routers map[actors.NodeID]*actors.Router) (Stats, error) {
+// ExecuteUntil delivers messages between actors until the condition channel is closed
+func ExecuteUntil(t *testing.T, routers map[actors.NodeID]*actors.Router, condition <-chan struct{}) (Stats, error) {
 	var stats Stats
 	bus := combine(t, routers)
 	for {
 		select {
+		case <-condition:
+			return stats, nil
 		case <-t.Context().Done():
 			return stats, t.Context().Err()
 		case msg, ok := <-bus:
@@ -68,7 +70,7 @@ func Execute(t *testing.T, routers map[actors.NodeID]*actors.Router) (Stats, err
 				t.Logf("dropping message to non-existing node %s: %s", msg.recipient, msg)
 				continue
 			}
-			// t.Logf("delivering %s", msg)
+			t.Logf("delivering %s", msg)
 			select {
 			case router.GetEndpoint(msg.path).In() <- msg.msg:
 				stats.Delivered++
@@ -79,6 +81,11 @@ func Execute(t *testing.T, routers map[actors.NodeID]*actors.Router) (Stats, err
 			}
 		}
 	}
+}
+
+// Execute delivers messages between actors until all Endpoints are closed or the test context is done
+func Execute(t *testing.T, routers map[actors.NodeID]*actors.Router) (Stats, error) {
+	return ExecuteUntil(t, routers, nil)
 }
 
 // combine combines all out channels into one

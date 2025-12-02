@@ -75,12 +75,12 @@ func genericTest(
 		}
 		return e
 	}
-	faulty := nodeIDs[:silentNodes]
+	silent := nodeIDs[:silentNodes]
 	nodes := map[gpa.NodeID]gpa.GPA{}
 	for _, nid := range nodeIDs {
 		acssInst := acss.New(suite, nodeIDs, nodePKs, f, nid, nodeSKs[nid], dealer, dealCB, log.NewChildLogger(nid.ShortString()))
 		nodes[nid] = acssInst
-		if slices.Contains(faulty, nid) {
+		if slices.Contains(silent, nid) {
 			nodes[nid] = &silentNode{nested: acssInst}
 		}
 		if nid == dealer {
@@ -90,7 +90,7 @@ func genericTest(
 	gpa.NewTestContext(nodes).RunAll()
 	outPriShares := []*share.PriShare{}
 	for nid, n := range nodes {
-		if !slices.Contains(faulty, nid) {
+		if !slices.Contains(silent, nid) {
 			o := n.(*acss.ACSS).Output()
 			require.NotNil(t, o)
 			require.NotNil(t, o.PriShare)
