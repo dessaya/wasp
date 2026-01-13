@@ -1,7 +1,9 @@
-package future
+package actors
 
 import (
 	"context"
+
+	"github.com/samber/lo"
 )
 
 // Future represents a value that will be available some time in the future.
@@ -10,8 +12,8 @@ type Future[T any] struct {
 	value T
 }
 
-// New creates a new Future.
-func New[T any]() *Future[T] {
+// NewFuture creates a new Future.
+func NewFuture[T any]() *Future[T] {
 	f := &Future[T]{
 		ready: make(chan struct{}),
 	}
@@ -71,4 +73,28 @@ func WaitAll[T any](ctx context.Context, futs []*Future[T]) error {
 		}
 	}
 	return nil
+}
+
+// Run runs the given function in a new goroutine and returns a Future
+// that will contain the Result of the function when it completes.
+func Run[T any](f func() (T, error)) *Future[Result[T]] {
+	fut := NewFuture[Result[T]]()
+	go func() {
+		v, err := f()
+		fut.Set(NewResult(v, err))
+	}()
+	return fut
+}
+
+// JoinFutures returns a channel that will receive the results of all the given futures.
+// The results are sent in the order the futures are provided, with their index.
+func JoinFutures[T any](futs []*Future[T]) <-chan lo.Tuple2[int, T] {
+	ch := make(chan lo.Tuple2[int, T], len(futs))
+	for i, f := range futs {
+		go func() {
+			v := <-f.ValueChan()
+			ch <- lo.T2(i, v)
+		}()
+	}
+	return ch
 }

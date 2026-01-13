@@ -121,3 +121,7 @@ func (e *Endpoint) SendToAllButMe(ctx context.Context, m MessagePayload) error {
 	}
 	return nil
 }
+
+func (e *Endpoint) Sub(subpath string, args ...any) *Endpoint {
+	return e.Router.GetEndpoint(e.Path.Sub(subpath, args...))
+}

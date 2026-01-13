@@ -10,7 +10,6 @@ import (
 	"go.dedis.ch/kyber/v3/share"
 	"go.dedis.ch/kyber/v3/suites"
 
-	"github.com/iotaledger/wasp/v2/packages/actors/future"
 	"github.com/iotaledger/wasp/v2/packages/gpa/acss/crypto"
 )
 
@@ -100,7 +99,7 @@ type ACSS struct {
 	peerPKs  map[NodeID]kyber.Point
 	mySK     kyber.Scalar
 	myIndex  int
-	output   *future.Future[*ACSSOutput]
+	output   *Future[*ACSSOutput]
 	log      *slog.Logger
 }
 
@@ -166,7 +165,7 @@ func NewACSS(
 		peerPKs:  peerPKs,
 		mySK:     mySK,
 		myIndex:  myIndex,
-		output:   future.New[*ACSSOutput](),
+		output:   NewFuture[*ACSSOutput](),
 		log:      log,
 	}
 }
@@ -177,7 +176,7 @@ func (a *ACSS) Endpoint() *Endpoint {
 
 // Output returns a future that will be set when the ACSS protocol
 // completes successfully.
-func (a *ACSS) Output() *future.Future[*ACSSOutput] {
+func (a *ACSS) Output() *Future[*ACSSOutput] {
 	return a.output
 }
 
@@ -242,8 +241,7 @@ func (a *ACSS) Receive(ctx context.Context, dealer NodeID) error {
 }
 
 func (a *ACSS) makeRBC(dealer NodeID) *ReliableBroadcast {
-	rbcEndpoint := a.endpoint.Router.GetEndpoint(a.endpoint.Path.Sub("rbc"))
-	return NewReliableBroadcast(rbcEndpoint, a.f, dealer, a.log)
+	return NewReliableBroadcast(a.endpoint.Sub("rbc"), a.f, dealer, a.log)
 }
 
 func (a *ACSS) mainLoop(ctx context.Context, rbcOut []byte) error {

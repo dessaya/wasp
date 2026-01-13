@@ -14,7 +14,6 @@ import (
 
 	"github.com/iotaledger/wasp/v2/packages/actors"
 	"github.com/iotaledger/wasp/v2/packages/actors/actorstest"
-	"github.com/iotaledger/wasp/v2/packages/actors/future"
 	"github.com/iotaledger/wasp/v2/packages/gpa/acss/crypto"
 	"github.com/iotaledger/wasp/v2/packages/tcrypto"
 )
@@ -73,7 +72,7 @@ func runACSSTest(t *testing.T, n, f int, silent int, faultyDeals int) {
 	isValidNode := func(i int) bool { return i < validRange }
 
 	dealer := peers[rand.Intn(validRange)]
-	outputs := make([]*future.Future[*actors.ACSSOutput], validRange)
+	outputs := make([]*actors.Future[*actors.ACSSOutput], validRange)
 
 	for i, nid := range peers {
 		endpoint := routers[nid].GetEndpoint(actors.Path("acss"))
@@ -108,7 +107,7 @@ func runACSSTest(t *testing.T, n, f int, silent int, faultyDeals int) {
 
 	outputsReady := make(chan struct{})
 	go func() {
-		err := future.WaitAll(t.Context(), outputs)
+		err := actors.WaitAll(t.Context(), outputs)
 		require.NoError(t, err, "waiting for outputs failed")
 		close(outputsReady)
 	}()
