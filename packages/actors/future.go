@@ -23,6 +23,9 @@ func NewFuture[T any]() *Future[T] {
 // Set sets the value of the future and marks it as ready.
 // Set should only be called once.
 func (f *Future[T]) Set(value T) {
+	if f.IsReady() {
+		panic("future already set")
+	}
 	f.value = value
 	close(f.ready)
 }
@@ -36,6 +39,13 @@ func (f *Future[T]) Get(ctx context.Context) (T, error) {
 	case <-ctx.Done():
 		return zero, ctx.Err()
 	}
+}
+
+func (f *Future[T]) MustGet() T {
+	if !f.IsReady() {
+		panic("future not ready")
+	}
+	return f.value
 }
 
 // IsReady returns true if the future is ready.
@@ -73,17 +83,6 @@ func WaitAll[T any](ctx context.Context, futs []*Future[T]) error {
 		}
 	}
 	return nil
-}
-
-// Run runs the given function in a new goroutine and returns a Future
-// that will contain the Result of the function when it completes.
-func Run[T any](f func() (T, error)) *Future[Result[T]] {
-	fut := NewFuture[Result[T]]()
-	go func() {
-		v, err := f()
-		fut.Set(NewResult(v, err))
-	}()
-	return fut
 }
 
 // JoinFutures returns a channel that will receive the results of all the given futures.

@@ -2,7 +2,6 @@ package actors
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	"github.com/samber/lo"
@@ -31,10 +30,9 @@ import (
 // >     indexes of each BA that delivered 1. Wait for the output v_j for
 // >     each RBC_j such that j ∈ C. Finally output ∪_{j∈C} v_j.
 type ACS struct {
-	endpoint *Endpoint
-	f        int
-	makeCC   MakeCommonCoinFunc
-	log      *slog.Logger
+	Actor[map[NodeID][]byte]
+	f      int
+	makeCC MakeCommonCoinFunc
 }
 
 // Constructor.
@@ -45,102 +43,111 @@ func NewACS(
 	log *slog.Logger,
 ) *ACS {
 	return &ACS{
-		endpoint: endpoint,
-		f:        f,
-		makeCC:   makeCC,
-		log:      log,
+		Actor:  NewActor[map[NodeID][]byte](endpoint, log),
+		f:      f,
+		makeCC: makeCC,
 	}
 }
 
-func (a *ACS) Run(ctx context.Context, vi []byte) (map[NodeID][]byte, error) {
-	defer a.endpoint.Close()
+func (a *ACS) Run(ctx context.Context, vi []byte) {
+	defer a.Endpoint().Close()
 
 	// > Let {RBC_i}_N refer to N instances of the reliable broadcast protocol,
 	// > where P_i is the sender of RBC_i.
-	rbcs := make([]*ReliableBroadcast, a.endpoint.N())
-	for i, nid := range a.endpoint.Router.Peers {
-		rbcs[i] = NewReliableBroadcast(a.endpoint.Sub("rbc:%d", i), a.f, nid, a.log)
+	rbcs := make([]*ReliableBroadcast, a.Endpoint().N())
+	rbcDone := make(chan int)
+	for i, nid := range a.Endpoint().Router.Peers {
+		rbc := NewReliableBroadcast(a.Endpoint().Sub("rbc:%d", i), a.f, nid, a.Log())
+		go func() {
+			if nid == a.Endpoint().Me() {
+				// >   • upon receiving input v_i, input v_i to RBC_i
+				rbc.Broadcast(ctx, vi)
+			} else {
+				rbc.Receive(ctx)
+			}
+		}()
+		go func() {
+			_, err := WaitSubActor(ctx, a, rbc)
+			if err != nil {
+				return
+			}
+			rbcDone <- i
+		}()
+		rbcs[i] = rbc
 	}
-
-	rbcResults := make([]*Future[Result[[]byte]], a.endpoint.N())
-	for i, nid := range a.endpoint.Router.Peers {
-		if nid == a.endpoint.Me() {
-			// >   • upon receiving input v_i, input v_i to RBC_i
-			rbcResults[i] = Run(func() ([]byte, error) {
-				return rbcs[i].Broadcast(ctx, vi)
-			})
-		} else {
-			rbcResults[i] = Run(func() ([]byte, error) {
-				return rbcs[i].Receive(ctx)
-			})
-		}
-	}
-	rbcChan := JoinFutures(rbcResults)
 
 	// > Let {BA_i}_N refer to N instances
 	// > of the binary byzantine agreement protocol.
-	abas := make([]*BinaryAgreement, a.endpoint.N())
-	abaResults := make(map[int]bool)
-	abaDone := make(chan error)
-	makeABA := func(i int, input bool) {
-		abas[i] = NewBinaryAgreement(a.endpoint.Sub("aba:%d", i), a.f, a.makeCC, a.log)
+	abas := make([]*BinaryAgreement, a.Endpoint().N())
+	abaDone := make(chan int)
+	startABA := func(i int, input bool) {
+		aba := NewBinaryAgreement(a.Endpoint().Sub("aba:%d", i), a.f, a.makeCC, a.Log())
 		go func() {
-			abaOut, err := abas[i].Run(ctx, input)
-			abaResults[i] = abaOut
-			abaDone <- err
+			aba.Run(ctx, input)
 		}()
+		go func() {
+			_, err := WaitSubActor(ctx, a, aba)
+			if err != nil {
+				return
+			}
+			abaDone <- i
+		}()
+		abas[i] = aba
+	}
+
+	abaResults := make(map[int]bool)
+	checkOutput := func() {
+		if a.Output().IsReady() {
+			return
+		}
+
+		// >   • once all instances of BA have completed, let C ⊂ [1..N] be the
+		// >     indexes of each BA that delivered 1. Wait for the output v_j for
+		// >     each RBC_j such that j ∈ C. Finally output ∪_{j∈C} v_j.
+		if len(abaResults) >= a.Endpoint().N() {
+			ret := make(map[NodeID][]byte)
+			for i, val := range abaResults {
+				if val {
+					if !rbcs[i].Output().IsReady() {
+						return
+					}
+					rbcOut := rbcs[i].Output().MustGet()
+					ret[a.Endpoint().Router.Peers[i]] = rbcOut
+				}
+			}
+			a.Log().Info("ACS done", "count", len(ret))
+			a.SetOutput(ret)
+		}
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
-		case rbcRes := <-rbcChan:
+			a.LogError(ctx.Err())
+			return
+		case j := <-rbcDone:
 			// >   • upon delivery of v_j from RBC_j, if input has not yet been
 			// >     provided to BA_j, then provide input 1 to BA_j.
-			j := rbcRes.A
-			res := rbcRes.B
-			if !res.IsOk() {
-				return nil, fmt.Errorf("RBC failed: %w", rbcRes.B.Err)
-			}
-			a.log.Info("RBC done", "i", j)
+			a.Log().Info("RBC done", "i", j)
 			if abas[j] == nil {
-				makeABA(j, true)
+				startABA(j, true)
 			}
-		case err := <-abaDone:
-			a.log.Info("ABA done", "amount", len(abaResults))
+			checkOutput()
+		case i := <-abaDone:
 			// >   • upon delivery of value 1 from at least N − f instances of BA,
 			// >     provide input 0 to each instance of BA that has not yet been
 			// >     provided input.
-			if err != nil {
-				return nil, fmt.Errorf("ABA failed: %w", err)
-			}
-			if lo.Count(lo.Values(abaResults), true) == a.endpoint.N()-a.f {
+			abaOut := abas[i].Output().MustGet()
+			abaResults[i] = abaOut
+			a.Log().Info("ABA done", "aba_done", len(abaResults))
+			if lo.Count(lo.Values(abaResults), true) == a.Endpoint().N()-a.f {
 				for i, aba := range abas {
 					if aba == nil {
-						makeABA(i, false)
+						startABA(i, false)
 					}
 				}
 			}
-			// >   • once all instances of BA have completed, let C ⊂ [1..N] be the
-			// >     indexes of each BA that delivered 1. Wait for the output v_j for
-			// >     each RBC_j such that j ∈ C. Finally output ∪_{j∈C} v_j.
-			if len(abaResults) == a.endpoint.N() {
-				ret := make(map[NodeID][]byte)
-				for i, val := range abaResults {
-					if val {
-						rbcRes, err := rbcResults[i].Get(ctx)
-						if err != nil {
-							return nil, fmt.Errorf("waiting for RBC result failed: %w", err)
-						}
-						if !rbcRes.IsOk() {
-							return nil, fmt.Errorf("RBC failed: %w", rbcRes.Err)
-						}
-						ret[a.endpoint.Router.Peers[i]] = *rbcRes.Ok
-					}
-				}
-				return ret, nil
-			}
+			checkOutput()
 		}
 	}
 }

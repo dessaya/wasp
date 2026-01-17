@@ -52,14 +52,7 @@ func testACSCase(t *testing.T, n, f, silent int) {
 
 	active := n - silent
 
-	type result struct {
-		node actors.NodeID
-		out  map[actors.NodeID][]byte
-		err  error
-	}
-
-	outCh := make(chan result, active)
-
+	nodes := make(map[actors.NodeID]*actors.ACS)
 	for i, nodeID := range peers {
 		endpoint := routers[nodeID].GetEndpoint(path)
 		if i < active {
@@ -78,13 +71,12 @@ func testACSCase(t *testing.T, n, f, silent int) {
 				)
 			}
 			acs := actors.NewACS(endpoint, f, makeCC, slog.Default().With("nodeID", nodeID.ShortString()))
-
-			go func(nodeID actors.NodeID) {
-				// Each node receives a deterministic, node-specific input:
-				vi := fmt.Appendf(nil, "%v-input", nodeID)
-				out, err := acs.Run(t.Context(), vi)
-				outCh <- result{node: nodeID, out: out, err: err}
-			}(nodeID)
+			nodes[nodeID] = acs
+			// Each node receives a deterministic, node-specific input:
+			vi := fmt.Appendf(nil, "%v-input", nodeID)
+			go func() {
+				acs.Run(t.Context(), vi)
+			}()
 		} else {
 			s := actorstest.NewSilent(endpoint)
 			go func() {
@@ -93,35 +85,16 @@ func testACSCase(t *testing.T, n, f, silent int) {
 		}
 	}
 
-	// Execute message delivery until all endpoints are closed.
-	stats, err := actorstest.Execute(t, routers)
-	require.NoError(t, err)
-	t.Logf("delivered %d messages", stats.Delivered)
+	done := actorstest.ExecuteAndTrack(t, routers, nodes)
 
 	// Collect outputs from active nodes.
-	results := make([]result, 0, active)
+	results := make(map[actors.NodeID]map[actors.NodeID][]byte)
 	for range active {
-		r := <-outCh
-		require.NoErrorf(t, r.err, "node %s failed ACS", r.node.ShortString())
-		require.NotNilf(t, r.out, "node %s returned nil ACS output", r.node.ShortString())
-		results = append(results, r)
+		nodeID := <-done
+		results[nodeID] = nodes[nodeID].Output().MustGet()
 	}
 
-	// Verify all honest nodes decided on the same subset and that at least one value is included.
-	// We compare the maps structurally.
-	ref := results[0].out
-	require.NotEmpty(t, ref, "ACS output of reference node is empty")
-
-	for _, r := range results[1:] {
-		require.Equalf(
-			t,
-			ref,
-			r.out,
-			"ACS outputs differ between nodes %s and %s",
-			results[0].node.ShortString(),
-			r.node.ShortString(),
-		)
-	}
+	ref := results[peers[0]]
 
 	// Sanity: all values should be some node's input.
 	for nid, v := range ref {
@@ -133,6 +106,19 @@ func testACSCase(t *testing.T, n, f, silent int) {
 			"value for node %s does not look like an input string: %q",
 			nid.ShortString(),
 			string(v),
+		)
+	}
+
+	// Verify all honest nodes decided on the same subset and that at least one value is included.
+	// We compare the maps structurally.
+	for nodeID, r := range results {
+		require.Equalf(
+			t,
+			ref,
+			r,
+			"ACS outputs differ between nodes %s and %s",
+			peers[0].ShortString(),
+			nodeID.ShortString(),
 		)
 	}
 }

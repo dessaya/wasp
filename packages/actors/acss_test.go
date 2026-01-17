@@ -1,8 +1,6 @@
 package actors_test
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -72,30 +70,25 @@ func runACSSTest(t *testing.T, n, f int, silent int, faultyDeals int) {
 	isValidNode := func(i int) bool { return i < validRange }
 
 	dealer := peers[rand.Intn(validRange)]
-	outputs := make([]*actors.Future[*actors.ACSSOutput], validRange)
 
+	nodes := make(map[actors.NodeID]*actors.ACSS)
 	for i, nid := range peers {
 		endpoint := routers[nid].GetEndpoint(actors.Path("acss"))
 		if isValidNode(i) {
 			acssActor := actors.NewACSS(endpoint, f, suite, pubKeys, sks[nid], slog.Default().With("nodeID", nid.ShortString()))
 			go func() {
-				var err error
 				if nid == dealer {
 					deal := acssActor.MakeDealFromSecret(secret)
 					for range faultyDeals {
 						// corrupt deal
 						deal.Shares[i][0]++
 					}
-					err = acssActor.ShareDeal(t.Context(), deal)
+					acssActor.ShareDeal(t.Context(), deal)
 				} else {
-					err = acssActor.Receive(t.Context(), dealer)
+					acssActor.Receive(t.Context(), dealer)
 				}
-				if errors.Is(err, context.Canceled) {
-					return
-				}
-				require.NoError(t, err)
 			}()
-			outputs[i] = acssActor.Output()
+			nodes[nid] = acssActor
 		} else {
 			// silent nodes do nothing
 			silentActor := actorstest.NewSilent(endpoint)
@@ -105,21 +98,12 @@ func runACSSTest(t *testing.T, n, f int, silent int, faultyDeals int) {
 		}
 	}
 
-	outputsReady := make(chan struct{})
-	go func() {
-		err := actors.WaitAll(t.Context(), outputs)
-		require.NoError(t, err, "waiting for outputs failed")
-		close(outputsReady)
-	}()
-
-	stats, err := actorstest.ExecuteUntil(t, routers, outputsReady)
-	t.Logf("Delivered %d messages", stats.Delivered)
-	require.NoError(t, err, "message execution failed")
+	done := actorstest.ExecuteAndTrack(t, routers, nodes)
 
 	var priShares []*share.PriShare
-	for i := range validRange {
-		o, err := outputs[i].Get(t.Context())
-		require.NoError(t, err)
+	for range validRange {
+		nodeID := <-done
+		o := nodes[nodeID].Output().MustGet()
 		require.NotNil(t, o)
 		require.NotNil(t, o.PriShare)
 		require.NotNil(t, o.Commits)

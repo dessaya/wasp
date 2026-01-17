@@ -75,20 +75,10 @@ func testABA(t *testing.T, n, f int, silent int, input func() bool, expected *bo
 	// Common coin path will be abaPath.Sub("cc%d", r) per round
 
 	// Prepare ABA actors and start them.
-	outputs := make(chan struct {
-		node actors.NodeID
-		val  bool
-	}, active)
-
+	abas := make(map[actors.NodeID]*actors.BinaryAgreement)
 	for i, nodeID := range peers {
 		endpoint := routers[nodeID].GetEndpoint(abaPath)
-		if i >= active {
-			// silent node
-			s := actorstest.NewSilent(endpoint)
-			go func() {
-				_ = s.Run(t.Context())
-			}()
-		} else {
+		if i < active {
 			// fair node
 			makeCC := func(round int, endpoint *actors.Endpoint) *actors.CommonCoinBLSSig {
 				return actors.NewCommonCoinBLSSig(
@@ -107,34 +97,28 @@ func testABA(t *testing.T, n, f int, silent int, input func() bool, expected *bo
 				makeCC,
 				slog.Default(),
 			)
-			go func(nodeID actors.NodeID, aba *actors.BinaryAgreement, input func() bool) {
-				val, err := aba.Run(t.Context(), input())
-				require.NoError(t, err)
-				t.Logf("node %s ABA terminated with value %t", nodeID.ShortString(), val)
-				outputs <- struct {
-					node actors.NodeID
-					val  bool
-				}{node: nodeID, val: val}
-			}(nodeID, aba, input)
+			go func() {
+				aba.Run(t.Context(), input())
+			}()
+			abas[nodeID] = aba
+		} else {
+			// silent node
+			s := actorstest.NewSilent(endpoint)
+			go func() {
+				_ = s.Run(t.Context())
+			}()
 		}
 	}
 
-	// Execute message delivery until all endpoints are closed.
-	stats, err := actorstest.Execute(t, routers)
-	require.NoError(t, err)
-	t.Logf("delivered %d messages", stats.Delivered)
+	done := actorstest.ExecuteAndTrack(t, routers, abas)
 
 	// Collect outputs from all active nodes.
 	results := make(map[actors.NodeID]bool, active)
 	var refVal bool
 	for range active {
-		select {
-		case out := <-outputs:
-			results[out.node] = out.val
-			refVal = out.val
-		case <-t.Context().Done():
-			t.Fatalf("context closed while waiting for ABA outputs: %v", t.Context().Err())
-		}
+		nodeID := <-done
+		results[nodeID] = abas[nodeID].Output().MustGet()
+		refVal = results[nodeID]
 	}
 	if expected != nil {
 		require.Equal(t, *expected, refVal, "ABA result does not match expected uniform input")

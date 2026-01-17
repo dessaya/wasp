@@ -41,49 +41,40 @@ func testBracha(t *testing.T, n, f, s int) {
 	}
 	const path = "bracha"
 	peers, routers := actorstest.MakeRouters(t, n)
-	nodes := map[actors.NodeID]*actors.ReliableBroadcast{}
+	rbcs := map[actors.NodeID]*actors.ReliableBroadcast{}
 	broadcaster := peers[0]
 
-	ctx := t.Context()
 	m := []byte("hello")
-	r := make(chan []byte, n-s) // expecting n-s responses
 
 	for i, nodeID := range peers {
 		endpoint := routers[nodeID].GetEndpoint(path)
 		if i < n-s {
 			// fair node
 			rbc := actors.NewReliableBroadcast(endpoint, f, broadcaster, slog.Default())
-			nodes[nodeID] = rbc
+			rbcs[nodeID] = rbc
 			go func() {
-				var out []byte
-				var err error
 				if i == 0 {
 					// broadcaster broadcasts "hello"
-					out, err = rbc.Broadcast(ctx, m)
+					rbc.Broadcast(t.Context(), m)
 				} else {
 					// other nodes receive "hello"
-					out, err = rbc.Receive(ctx)
+					rbc.Receive(t.Context())
 				}
-				require.NoError(t, err)
-				r <- out
 			}()
 		} else {
 			// silent node
 			s := actorstest.NewSilent(endpoint)
 			go func() {
-				_ = s.Run(ctx)
+				_ = s.Run(t.Context())
 			}()
 		}
 	}
 
-	// execute runs until all transports are closed
-	stats, err := actorstest.Execute(t, routers)
-	require.NoError(t, err)
-	t.Logf("delivered %d messages", stats.Delivered)
+	done := actorstest.ExecuteAndTrack(t, routers, rbcs)
 
 	// check that all nodes received the correct message
 	for range n - s {
-		out := <-r
-		require.Equal(t, m, out)
+		nodeID := <-done
+		require.Equal(t, m, rbcs[nodeID].Output().MustGet())
 	}
 }

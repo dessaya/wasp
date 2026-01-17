@@ -46,7 +46,6 @@ func testCommonCoinCase(t *testing.T, n, threshold, silent int) {
 	sid := []byte{0xA, 0xB, 0xC, 0xD} // session identifier for signing
 	active := n - silent
 	nodes := make(map[actors.NodeID]*actors.CommonCoinBLSSig, active)
-	outCh := make(chan bool, active)
 
 	for i, nodeID := range peers {
 		endpoint := routers[nodeID].GetEndpoint(path)
@@ -54,11 +53,9 @@ func testCommonCoinCase(t *testing.T, n, threshold, silent int) {
 			// fair node
 			node := actors.NewCommonCoinBLSSig(endpoint, threshold, suite, pubPoly, priShares[i], sid, slog.Default())
 			nodes[nodeID] = node
-			go func(nodeID actors.NodeID, node *actors.CommonCoinBLSSig) {
-				coin, err := node.Run(t.Context())
-				require.NoError(t, err, "node %s failed to decide coin", nodeID.ShortString())
-				outCh <- coin
-			}(nodeID, node)
+			go func() {
+				node.Run(t.Context())
+			}()
 		} else {
 			// silent node
 			s := actorstest.NewSilent(endpoint)
@@ -68,17 +65,13 @@ func testCommonCoinCase(t *testing.T, n, threshold, silent int) {
 		}
 	}
 
-	// Execute message delivery until all endpoints are closed.
-	stats, err := actorstest.Execute(t, routers)
-	require.NoError(t, err)
-	t.Logf("delivered %d messages", stats.Delivered)
+	done := actorstest.ExecuteAndTrack(t, routers, nodes)
 
-	// verify results
 	var coins []bool
 	for range active {
-		coins = append(coins, <-outCh)
+		nodeID := <-done
+		coins = append(coins, nodes[nodeID].Output().MustGet())
 	}
-	require.Equal(t, active, len(coins), "not all active nodes decided")
 	firstCoin := coins[0]
 	for i, coin := range coins {
 		require.Equalf(t, firstCoin, coin, "node %d decided differently", i)

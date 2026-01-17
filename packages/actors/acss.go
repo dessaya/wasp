@@ -93,14 +93,12 @@ import (
 // scheme allowing to keep the private keys secret. The scheme implementation is taken
 // from the PoC mentioned above. It is described in <https://hackmd.io/@CcRtfCBnRbW82-AdbFJUig/S1qcPiUN5>.
 type ACSS struct {
-	endpoint *Endpoint
-	f        int
-	suite    suites.Suite
-	peerPKs  map[NodeID]kyber.Point
-	mySK     kyber.Scalar
-	myIndex  int
-	output   *Future[*ACSSOutput]
-	log      *slog.Logger
+	Actor[*ACSSOutput]
+	f       int
+	suite   suites.Suite
+	peerPKs map[NodeID]kyber.Point
+	mySK    kyber.Scalar
+	myIndex int
 }
 
 type ACSSOutput struct {
@@ -159,25 +157,13 @@ func NewACSS(
 	}
 
 	return &ACSS{
-		endpoint: endpoint,
-		f:        f,
-		suite:    suite,
-		peerPKs:  peerPKs,
-		mySK:     mySK,
-		myIndex:  myIndex,
-		output:   NewFuture[*ACSSOutput](),
-		log:      log,
+		Actor:   NewActor[*ACSSOutput](endpoint, log),
+		f:       f,
+		suite:   suite,
+		peerPKs: peerPKs,
+		mySK:    mySK,
+		myIndex: myIndex,
 	}
-}
-
-func (a *ACSS) Endpoint() *Endpoint {
-	return a.endpoint
-}
-
-// Output returns a future that will be set when the ACSS protocol
-// completes successfully.
-func (a *ACSS) Output() *Future[*ACSSOutput] {
-	return a.output
 }
 
 // MakeDealFromSecret creates a new Deal that can be shared with ShareDeal.
@@ -187,7 +173,7 @@ func (a *ACSS) MakeDealFromSecret(secret kyber.Scalar) *crypto.Deal {
 	// > C, S := VSS.Share(ϕ, f+1, n)
 	// > E := [PKI.Enc(S[i], pkᵢ) for each party i]
 	pubKeys := make([]kyber.Point, 0)
-	for _, peerID := range a.endpoint.Router.Peers {
+	for _, peerID := range a.Endpoint().Router.Peers {
 		pubKeys = append(pubKeys, a.peerPKs[peerID])
 	}
 	return crypto.NewDeal(a.suite, pubKeys, secret)
@@ -195,85 +181,94 @@ func (a *ACSS) MakeDealFromSecret(secret kyber.Scalar) *crypto.Deal {
 
 // ShareDeal implements the dealer's part of the ACSS protocol, which shares the
 // given secret with all parties.
-func (a *ACSS) ShareDeal(ctx context.Context, deal *crypto.Deal) error {
-	defer a.endpoint.Close()
+func (a *ACSS) ShareDeal(ctx context.Context, deal *crypto.Deal) {
+	defer a.Endpoint().Close()
 
 	data, err := deal.MarshalBinary()
 	if err != nil {
 		panic(fmt.Sprintf("acss: internal error: %v", err))
 	}
-	if a.endpoint.N() == 1 {
+	if a.Endpoint().N() == 1 {
 		// shortcut for n=1
 		secret := crypto.Secret(a.suite, deal.PubKey, a.mySK)
 		priShare, err := crypto.DecryptShare(a.suite, deal, a.myIndex, secret)
 		if err != nil {
-			return fmt.Errorf("ACSS: decryption failed: %w", err)
+			a.LogError(fmt.Errorf("ACSS: decryption failed: %w", err))
+			return
 		}
-		a.output.Set(&ACSSOutput{
+		a.SetOutput(&ACSSOutput{
 			PriShare: priShare,
 			Commits:  deal.Commits,
 		})
-		return nil
+		return
 	}
 	// > RBC(C||E)
-	rbcOut, err := a.makeRBC(a.endpoint.Me()).Broadcast(ctx, data)
+	rbcOut, err := a.runRBC(ctx, a.Endpoint().Me(), func(ctx context.Context, rbc *ReliableBroadcast) {
+		rbc.Broadcast(ctx, data)
+	})
 	if err != nil {
-		return fmt.Errorf("RBC.Broadcast failed: %w", err)
+		return
 	}
-	return a.mainLoop(ctx, rbcOut)
+	a.mainLoop(ctx, rbcOut)
 }
 
 // Receive implements the receiver's part of the ACSS protocol, which receives
 // the shared secret from the dealer.
-func (a *ACSS) Receive(ctx context.Context, dealer NodeID) error {
-	defer a.endpoint.Close()
+func (a *ACSS) Receive(ctx context.Context, dealer NodeID) {
+	defer a.Endpoint().Close()
 
-	if a.endpoint.Me() == dealer {
-		return fmt.Errorf("dealer cannot call Receive")
+	if a.Endpoint().Me() == dealer {
+		a.LogError(fmt.Errorf("dealer cannot call Receive"))
+		return
 	}
 	// > // party i (including the dealer)
 	// > RBC(C||E)
-	rbcOut, err := a.makeRBC(dealer).Receive(ctx)
+	rbcOut, err := a.runRBC(ctx, dealer, func(ctx context.Context, rbc *ReliableBroadcast) {
+		rbc.Receive(ctx)
+	})
 	if err != nil {
-		return fmt.Errorf("RBC.Receive failed: %w", err)
+		return
 	}
-	return a.mainLoop(ctx, rbcOut)
+	a.mainLoop(ctx, rbcOut)
 }
 
-func (a *ACSS) makeRBC(dealer NodeID) *ReliableBroadcast {
-	return NewReliableBroadcast(a.endpoint.Sub("rbc"), a.f, dealer, a.log)
+func (a *ACSS) runRBC(ctx context.Context, dealer NodeID, f func(ctx context.Context, rbc *ReliableBroadcast)) ([]byte, error) {
+	rbc := NewReliableBroadcast(a.Endpoint().Sub("rbc"), a.f, dealer, a.Log())
+	go func() { f(ctx, rbc) }()
+	return WaitSubActor(ctx, a, rbc)
 }
 
-func (a *ACSS) mainLoop(ctx context.Context, rbcOut []byte) error {
+func (a *ACSS) mainLoop(ctx context.Context, rbcOut []byte) {
 	broadcastOk := func() {
-		a.endpoint.SendToAll(ctx, &msgACSSOk{})
+		a.Endpoint().SendToAll(ctx, &msgACSSOk{})
 	}
 
 	readySent := false
 	broadcastReady := func() {
 		if !readySent {
 			readySent = true
-			a.endpoint.SendToAll(ctx, &msgACSSReady{})
+			a.Endpoint().SendToAll(ctx, &msgACSSReady{})
 		}
 	}
 
 	broadcastImplicate := func(dealerPublic kyber.Point, err error) {
-		a.log.Warn("ACSS: broadcasting IMPLICATE", "error", err)
-		a.endpoint.SendToAll(ctx, &msgACSSImplicate{
+		a.Log().Warn("ACSS: broadcasting IMPLICATE", "error", err)
+		a.Endpoint().SendToAll(ctx, &msgACSSImplicate{
 			DLEQProof: crypto.Implicate(a.suite, dealerPublic, a.mySK),
 		})
 	}
 
 	broadcastRecover := func(dealerPublic kyber.Point) {
-		a.endpoint.SendToAll(ctx, &msgACSSRecover{
+		a.Endpoint().SendToAll(ctx, &msgACSSRecover{
 			RecoverySecret: crypto.Secret(a.suite, dealerPublic, a.mySK),
 		})
 	}
 
 	// > // party i (including the dealer)
-	deal, err := crypto.DealUnmarshalBinary(a.suite, a.endpoint.N(), rbcOut)
+	deal, err := crypto.DealUnmarshalBinary(a.suite, a.Endpoint().N(), rbcOut)
 	if err != nil {
-		return fmt.Errorf("ACSS: invalid RBC output: %w", err)
+		a.LogError(fmt.Errorf("ACSS: invalid RBC output: %w", err))
+		return
 	}
 	// > sᵢ := PKI.Dec(eᵢ, skᵢ)
 	// > if decrypt fails or VSS.Verify(C, i, sᵢ) == false:
@@ -294,9 +289,10 @@ func (a *ACSS) mainLoop(ctx context.Context, rbcOut []byte) error {
 	recoverReceived := make(map[NodeID]*share.PriShare)
 
 	for {
-		msg, err := a.endpoint.Receive(ctx)
+		msg, err := a.Endpoint().Receive(ctx)
 		if err != nil {
-			return fmt.Errorf("ACSS: Receive failed: %w", err)
+			a.LogError(fmt.Errorf("ACSS: Receive failed: %w", err))
+			return
 		}
 
 		switch m := msg.Payload.(type) {
@@ -305,7 +301,7 @@ func (a *ACSS) mainLoop(ctx context.Context, rbcOut []byte) error {
 				// > on receiving <OK> from n-f parties:
 				// >   send <READY> to all parties
 				okReceived[msg.Sender] = struct{}{}
-				if len(okReceived) >= a.endpoint.N()-a.f {
+				if len(okReceived) >= a.Endpoint().N()-a.f {
 					broadcastReady()
 				}
 			}
@@ -322,8 +318,8 @@ func (a *ACSS) mainLoop(ctx context.Context, rbcOut []byte) error {
 				// >   if sᵢ is valid:
 				// >     out = true
 				// >     output sᵢ
-				if !a.output.IsReady() && len(readyReceived) >= a.endpoint.N()-a.f && myShare != nil {
-					a.output.Set(&ACSSOutput{
+				if !a.Output().IsReady() && len(readyReceived) >= a.Endpoint().N()-a.f && myShare != nil {
+					a.SetOutput(&ACSSOutput{
 						PriShare: myShare,
 						Commits:  deal.Commits,
 					})
@@ -338,28 +334,28 @@ func (a *ACSS) mainLoop(ctx context.Context, rbcOut []byte) error {
 			// >       send <RECOVER, i, skᵢ> to all parties
 			// >       return
 			if _, ok := implicateReceived[msg.Sender]; !ok {
-				peerIndex := lo.IndexOf(a.endpoint.Router.Peers, msg.Sender)
+				peerIndex := lo.IndexOf(a.Endpoint().Router.Peers, msg.Sender)
 				if peerIndex < 0 {
-					a.log.Warn("Implication received from unknown peer", "peer", msg.Sender)
+					a.Log().Warn("Implication received from unknown peer", "peer", msg.Sender)
 					continue
 				}
 				implicateReceived[msg.Sender] = struct{}{}
 				secret, err := crypto.CheckImplicate(a.suite, deal.PubKey, a.peerPKs[msg.Sender], m.DLEQProof)
 				if err != nil {
-					a.log.Warn("Invalid implication received", "error", err)
+					a.Log().Warn("Invalid implication received", "error", err)
 					continue
 				}
 				_, err = crypto.DecryptShare(a.suite, deal, peerIndex, secret)
 				if err == nil {
 					// if we are able to decrypt the share, the implication is not correct
-					a.log.Warn("encrypted share is valid")
+					a.Log().Warn("encrypted share is valid")
 					continue
 				}
 				broadcastRecover(deal.PubKey)
 			}
 
 		case *msgACSSRecover:
-			if a.output.IsReady() {
+			if a.Output().IsReady() {
 				// Ignore the RECOVER messages, if we are done with the output.
 				continue
 			}
@@ -368,14 +364,14 @@ func (a *ACSS) mainLoop(ctx context.Context, rbcOut []byte) error {
 			// >       if VSS.Verify(C, j, sⱼ): T = T ∪ {sⱼ}
 			// >
 			if _, ok := recoverReceived[msg.Sender]; !ok {
-				peerIndex := lo.IndexOf(a.endpoint.Router.Peers, msg.Sender)
+				peerIndex := lo.IndexOf(a.Endpoint().Router.Peers, msg.Sender)
 				if peerIndex < 0 {
-					a.log.Warn("Recover received from unknown peer", "peer", msg.Sender)
+					a.Log().Warn("Recover received from unknown peer", "peer", msg.Sender)
 					continue
 				}
 				peerSecret, err := crypto.DecryptShare(a.suite, deal, peerIndex, m.RecoverySecret)
 				if err != nil {
-					a.log.Warn("invalid secret revealed")
+					a.Log().Warn("invalid secret revealed")
 					continue
 				}
 				recoverReceived[msg.Sender] = peerSecret
@@ -386,19 +382,19 @@ func (a *ACSS) mainLoop(ctx context.Context, rbcOut []byte) error {
 				// >       output sᵢ
 				if len(recoverReceived) >= a.f+1 {
 					priShares := lo.Values(recoverReceived)
-					myShare, err := crypto.InterpolateShare(a.suite, priShares, a.endpoint.N(), a.myIndex)
+					myShare, err := crypto.InterpolateShare(a.suite, priShares, a.Endpoint().N(), a.myIndex)
 					if err != nil {
-						a.log.Warn("Failed to recover pri-poly: %s", "error", err.Error())
+						a.Log().Warn("Failed to recover pri-poly: %s", "error", err.Error())
 						continue
 					}
-					a.output.Set(&ACSSOutput{
+					a.SetOutput(&ACSSOutput{
 						PriShare: myShare,
 						Commits:  deal.Commits,
 					})
 				}
 			}
 		default:
-			a.log.Warn("ACSS: unexpected message type", "type", msg.Payload.MsgType())
+			a.Log().Warn("ACSS: unexpected message type", "type", msg.Payload.MsgType())
 		}
 	}
 }

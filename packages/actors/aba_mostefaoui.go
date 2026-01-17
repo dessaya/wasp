@@ -52,10 +52,9 @@ import (
 type MakeCommonCoinFunc func(round int, endpoint *Endpoint) *CommonCoinBLSSig
 
 type BinaryAgreement struct {
-	endpoint *Endpoint
-	f        int                // maximum faulty nodes
-	makeCC   MakeCommonCoinFunc // creates the Common Coin actor
-	log      *slog.Logger       // A logger.
+	Actor[bool]
+	f      int                // maximum faulty nodes
+	makeCC MakeCommonCoinFunc // creates the Common Coin actor
 }
 
 type (
@@ -93,23 +92,19 @@ func NewBinaryAgreement(
 	log *slog.Logger,
 ) *BinaryAgreement {
 	return &BinaryAgreement{
-		endpoint: endpoint,
-		f:        f,
-		makeCC:   makeCC,
-		log:      log,
+		Actor:  NewActor[bool](endpoint, log),
+		f:      f,
+		makeCC: makeCC,
 	}
 }
 
-func (aba *BinaryAgreement) Endpoint() *Endpoint {
-	return aba.endpoint
-}
-
-func (aba *BinaryAgreement) Run(ctx context.Context, input bool) (output bool, err error) {
-	defer aba.endpoint.Close()
+func (aba *BinaryAgreement) Run(ctx context.Context, input bool) {
+	defer aba.Endpoint().Close()
 
 	// special case: if there's only one node, decide immediately
-	if aba.endpoint.N() == 1 {
-		return input, nil
+	if aba.Endpoint().N() == 1 {
+		aba.SetOutput(input)
+		return
 	}
 
 	// here we buffer incoming messages per-round; this is necessary
@@ -124,20 +119,24 @@ func (aba *BinaryAgreement) Run(ctx context.Context, input bool) (output bool, e
 	for r := 0; ; r++ {
 		vals, err := aba.doRound(ctx, r, est, incoming)
 		if err != nil {
-			return false, err
+			aba.LogError(err)
+			return
 		}
 
 		// > s ← Coin_r.GetCoin()
-		cc := aba.makeCC(r, aba.endpoint.Router.GetEndpoint(aba.endpoint.Path.Sub("cc%d", r)))
-		s, err := cc.Run(ctx)
+		cc := aba.makeCC(r, aba.Endpoint().Router.GetEndpoint(aba.Endpoint().Path.Sub("cc%d", r)))
+		go func() { cc.Run(ctx) }()
+		s, err := WaitSubActor(ctx, aba, cc)
 		if err != nil {
-			return false, fmt.Errorf("common coin failed in round %d: %w", r, err)
+			return
 		}
 
 		// > continue looping until both a value b is output in some round r,
 		// > and the value Coin_r' = b for some round r' > r.
-		if lastOutputRound >= 0 && r > lastOutputRound && s == output {
-			return output, nil
+		if lastOutputRound >= 0 && r > lastOutputRound && aba.Output().IsReady() {
+			if s == aba.Output().MustGet() {
+				return
+			}
 		}
 
 		// > if vals = {b}, then
@@ -149,7 +148,7 @@ func (aba *BinaryAgreement) Run(ctx context.Context, input bool) (output bool, e
 			est = b
 			if b == s {
 				lastOutputRound = r
-				output = b
+				aba.SetOutput(b)
 			}
 		} else {
 			est = s
@@ -164,7 +163,7 @@ func (aba *BinaryAgreement) doRound(ctx context.Context, r int, est bool, incomi
 			return nil
 		}
 		sentBVAL[b] = struct{}{}
-		return aba.endpoint.SendToAll(ctx, &msgABA{msgType: abaMsgTypeBVAL, round: r, b: b})
+		return aba.Endpoint().SendToAll(ctx, &msgABA{msgType: abaMsgTypeBVAL, round: r, b: b})
 	}
 
 	receivedBVAL := map[bool]map[NodeID]struct{}{}
@@ -210,7 +209,7 @@ func (aba *BinaryAgreement) doRound(ctx context.Context, r int, est bool, incomi
 					if len(binValues) == 0 {
 						// > wait until bin_values_r != {}, then
 						// > multicast AUX_r(w) where w ∈ bin_values_r
-						if err := aba.endpoint.SendToAll(ctx, &msgABA{msgType: abaMsgTypeAUX, round: r, b: m.b}); err != nil {
+						if err := aba.Endpoint().SendToAll(ctx, &msgABA{msgType: abaMsgTypeAUX, round: r, b: m.b}); err != nil {
 							return nil, err
 						}
 					}
@@ -222,7 +221,7 @@ func (aba *BinaryAgreement) doRound(ctx context.Context, r int, est bool, incomi
 				receivedAUX[msg.Sender] = m.b
 
 			default:
-				aba.log.Warn("Received unknown ABA message type", "type", fmt.Sprintf("%d", m.msgType))
+				aba.Log().Warn("Received unknown ABA message type", "type", fmt.Sprintf("%d", m.msgType))
 				continue
 			}
 
@@ -233,7 +232,7 @@ func (aba *BinaryAgreement) doRound(ctx context.Context, r int, est bool, incomi
 			// > are received, thus this condition may be triggered upon
 			// > arrival of either an AUX_r or a BVAL_r message)
 			vals := lo.Uniq(lo.Values(receivedAUX))
-			if len(binValues) > 0 && len(receivedAUX) >= aba.endpoint.N()-aba.f && lo.Every(lo.Keys(binValues), vals) {
+			if len(binValues) > 0 && len(receivedAUX) >= aba.Endpoint().N()-aba.f && lo.Every(lo.Keys(binValues), vals) {
 				return vals, nil
 			}
 		}
@@ -241,7 +240,7 @@ func (aba *BinaryAgreement) doRound(ctx context.Context, r int, est bool, incomi
 }
 
 func (aba *BinaryAgreement) receiveMessage(ctx context.Context, incoming map[int][]MessageIn) error {
-	msg, err := aba.endpoint.Receive(ctx)
+	msg, err := aba.Endpoint().Receive(ctx)
 	if err != nil {
 		return err
 	}
@@ -250,7 +249,7 @@ func (aba *BinaryAgreement) receiveMessage(ctx context.Context, incoming map[int
 		// classify message per-round
 		incoming[m.round] = append(incoming[m.round], msg)
 	default:
-		aba.log.Warn("Received unknown message type", "type", fmt.Sprintf("%T", m))
+		aba.Log().Warn("Received unknown message type", "type", fmt.Sprintf("%T", m))
 	}
 	return nil
 }

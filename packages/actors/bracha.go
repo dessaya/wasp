@@ -48,10 +48,9 @@ import (
 // In the above 𝑡 is "Given a network of 𝑛 nodes, of which up to 𝑡 could be malicious",
 // thus that's the parameter F in the specification below.
 type ReliableBroadcast struct {
-	endpoint    *Endpoint
+	Actor[[]byte]
 	f           int
 	broadcaster NodeID
-	log         *slog.Logger
 }
 
 type (
@@ -80,36 +79,41 @@ func NewReliableBroadcast(
 	log *slog.Logger,
 ) *ReliableBroadcast {
 	return &ReliableBroadcast{
-		endpoint:    endpoint,
+		Actor:       NewActor[[]byte](endpoint, log),
 		f:           f,
 		broadcaster: broadcaster,
-		log:         log,
 	}
-}
-
-func (r *ReliableBroadcast) Endpoint() *Endpoint {
-	return r.endpoint
 }
 
 // Broadcast implements the reliable broadcast algorithm from the broadcaster's side.
-func (r *ReliableBroadcast) Broadcast(ctx context.Context, m []byte) (output []byte, err error) {
+func (r *ReliableBroadcast) Broadcast(ctx context.Context, m []byte) {
 	//	01: // only broadcaster node
 	//	02: input 𝑀
 	//	03: send ⟨PROPOSE, 𝑀⟩ to all
-	if r.endpoint.Me() != r.broadcaster {
+	if r.Endpoint().Me() != r.broadcaster {
 		panic("only broadcaster can call Broadcast")
 	}
-	if err := r.endpoint.SendToAll(ctx, &msgPropose{m: m}); err != nil {
-		return nil, err
+	if err := r.Endpoint().SendToAll(ctx, &msgPropose{m: m}); err != nil {
+		r.LogError(err)
+		return
 	}
-	return r.Receive(ctx)
+	r.Receive(ctx)
 }
 
 // Receive implements the reliable broadcast algorithm for all nodes.
-func (r *ReliableBroadcast) Receive(ctx context.Context) (output []byte, err error) {
-	defer r.endpoint.Close()
+func (r *ReliableBroadcast) Receive(ctx context.Context) {
+	defer r.Endpoint().Close()
 
 	readySent := false
+	sendReady := func(m []byte) error {
+		if !readySent {
+			if err := r.Endpoint().SendToAll(ctx, &msgReady{m: m}); err != nil {
+				return err
+			}
+			readySent = true
+		}
+		return nil
+	}
 
 	echoCounters := make(map[hashing.HashValue]map[NodeID]bool)
 	readyCounters := make(map[hashing.HashValue]map[NodeID]bool)
@@ -124,9 +128,10 @@ func (r *ReliableBroadcast) Receive(ctx context.Context) (output []byte, err err
 	}
 
 	for {
-		msg, err := r.endpoint.Receive(ctx)
+		msg, err := r.Endpoint().Receive(ctx)
 		if err != nil {
-			return nil, err
+			r.LogError(err)
+			return
 		}
 		switch payload := msg.Payload.(type) {
 		//	06: upon receiving ⟨PROPOSE, 𝑀⟩ from the broadcaster do
@@ -134,11 +139,12 @@ func (r *ReliableBroadcast) Receive(ctx context.Context) (output []byte, err err
 		//	08:         send ⟨ECHO, 𝑀⟩ to all
 		case *msgPropose:
 			if msg.Sender != r.broadcaster {
-				r.log.Warn("RBC: ignoring PROPOSE from non-broadcaster", "sender", msg.Sender.String())
+				r.Log().Warn("RBC: ignoring PROPOSE from non-broadcaster", "sender", msg.Sender.String())
 				continue
 			}
-			if err := r.endpoint.SendToAll(ctx, &msgEcho{m: payload.m}); err != nil {
-				return nil, err
+			if err := r.Endpoint().SendToAll(ctx, &msgEcho{m: payload.m}); err != nil {
+				r.LogError(err)
+				return
 			}
 
 		//	09: upon receiving 2𝑡 + 1 ⟨ECHO, 𝑀⟩ messages and not having sent a READY message do
@@ -147,11 +153,11 @@ func (r *ReliableBroadcast) Receive(ctx context.Context) (output []byte, err err
 			echoReceived := counter(echoCounters, payload.m)
 			if !echoReceived[msg.Sender] {
 				echoReceived[msg.Sender] = true
-				if len(echoReceived) == 2*r.f+1 && !readySent {
-					if err := r.endpoint.SendToAll(ctx, &msgReady{m: payload.m}); err != nil {
-						return nil, err
+				if len(echoReceived) == 2*r.f+1 {
+					if err := sendReady(payload.m); err != nil {
+						r.LogError(err)
+						return
 					}
-					readySent = true
 				}
 			}
 
@@ -165,19 +171,17 @@ func (r *ReliableBroadcast) Receive(ctx context.Context) (output []byte, err err
 				readyReceived[msg.Sender] = true
 				switch len(readyReceived) {
 				case 2*r.f + 1:
-					return payload.m, nil
+					r.SetOutput(payload.m)
 				case r.f + 1:
-					if !readySent {
-						if err := r.endpoint.SendToAll(ctx, &msgReady{m: payload.m}); err != nil {
-							return nil, err
-						}
-						readySent = true
+					if err := sendReady(payload.m); err != nil {
+						r.LogError(err)
+						return
 					}
 				}
 			}
 
 		default:
-			r.log.Warn("ReliableBroadcast: unexpected message", "type", msg.Payload.MsgType(), "sender", msg.Sender.String())
+			r.Log().Warn("ReliableBroadcast: unexpected message", "type", msg.Payload.MsgType(), "sender", msg.Sender.String())
 		}
 	}
 }
