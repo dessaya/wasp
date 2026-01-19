@@ -40,7 +40,9 @@ func testBracha(t *testing.T, n, f, s int) {
 		t.Fatalf("number of silent nodes s=%d cannot be greater than f=%d", s, f)
 	}
 	const path = "bracha"
-	peers, routers := actorstest.MakeRouters(t, n)
+	ctx, stop, peers, routers := actorstest.MakeRouters(t, n)
+	defer stop()
+
 	rbcs := map[actors.NodeID]*actors.ReliableBroadcast{}
 	broadcaster := peers[0]
 
@@ -52,25 +54,20 @@ func testBracha(t *testing.T, n, f, s int) {
 			// fair node
 			rbc := actors.NewReliableBroadcast(endpoint, f, broadcaster, slog.Default())
 			rbcs[nodeID] = rbc
-			go func() {
-				if i == 0 {
-					// broadcaster broadcasts "hello"
-					rbc.Broadcast(t.Context(), m)
-				} else {
-					// other nodes receive "hello"
-					rbc.Receive(t.Context())
-				}
-			}()
+			if i == 0 {
+				// broadcaster broadcasts "hello"
+				rbc.Broadcast(m)
+			} else {
+				// other nodes receive "hello"
+				rbc.Receive()
+			}
 		} else {
 			// silent node
-			s := actorstest.NewSilent(endpoint)
-			go func() {
-				_ = s.Run(t.Context())
-			}()
+			actorstest.NewSilent(endpoint).Run()
 		}
 	}
 
-	done := actorstest.ExecuteAndTrack(t, routers, rbcs)
+	done := actorstest.ExecuteAndTrack(t, ctx, routers, rbcs)
 
 	// check that all nodes received the correct message
 	for range n - s {

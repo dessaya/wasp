@@ -1,13 +1,16 @@
 package actorstest
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"sync"
 	"testing"
 
 	"fortio.org/safecast"
+	"go.uber.org/goleak"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/iotaledger/wasp/v2/packages/actors"
 )
@@ -22,7 +25,9 @@ func MakeNodeIDFromIndex(index int) actors.NodeID {
 	return nodeID
 }
 
-func MakeRouters(t *testing.T, n int) ([]actors.NodeID, map[actors.NodeID]*actors.Router) {
+func MakeRouters(t *testing.T, n int) (*actors.Context, func(), []actors.NodeID, map[actors.NodeID]*actors.Router) {
+	ctx := actors.NewContext(t.Context())
+
 	var peers []actors.NodeID
 	for i := range n {
 		peers = append(peers, MakeNodeIDFromIndex(i))
@@ -30,10 +35,23 @@ func MakeRouters(t *testing.T, n int) ([]actors.NodeID, map[actors.NodeID]*actor
 	routers := make(map[actors.NodeID]*actors.Router)
 	for i := range n {
 		nodeID := MakeNodeIDFromIndex(i)
-		router := actors.NewRouter(t.Context(), nodeID, peers)
+		router := actors.NewRouter(ctx, nodeID, peers)
 		routers[nodeID] = router
 	}
-	return peers, routers
+
+	stop := func() {
+		ctx.Cancel()
+		r := ctx.Wg.WaitAndRecover()
+		if r != nil {
+			err := r.AsError()
+			if !errors.Is(err, context.Canceled) {
+				require.NoError(t, err)
+			}
+		}
+		goleak.VerifyNone(t)
+	}
+
+	return ctx, stop, peers, routers
 }
 
 type messageInTransit struct {
@@ -50,21 +68,15 @@ type Stats struct {
 	Delivered int
 }
 
-// ExecuteUntil delivers messages between actors until the condition channel is closed
-func ExecuteUntil(t *testing.T, routers map[actors.NodeID]*actors.Router, condition <-chan struct{}) (Stats, error) {
+// Execute delivers messages between actors until all Endpoints are closed or the test context is done
+func Execute(t *testing.T, ctx *actors.Context, routers map[actors.NodeID]*actors.Router) Stats {
 	var stats Stats
-	bus := combine(t, routers)
+	bus := combine(ctx, routers)
 	for {
 		select {
-		case <-condition:
-			return stats, nil
-		case <-t.Context().Done():
-			return stats, t.Context().Err()
-		case msg, ok := <-bus:
-			if !ok {
-				// all endpoints are closed
-				return stats, nil
-			}
+		case <-ctx.Done():
+			return stats
+		case msg := <-bus:
 			router, nodeExists := routers[msg.recipient]
 			if !nodeExists {
 				t.Logf("dropping message to non-existing node %s: %s", msg.recipient, msg)
@@ -74,43 +86,36 @@ func ExecuteUntil(t *testing.T, routers map[actors.NodeID]*actors.Router, condit
 			select {
 			case router.GetEndpoint(msg.path).In() <- msg.msg:
 				stats.Delivered++
-			case <-t.Context().Done():
-				return stats, t.Context().Err()
-			default:
-				return stats, errors.New("cannot deliver message: `in` channel full")
+			case <-ctx.Done():
+				return stats
 			}
 		}
 	}
 }
 
-// Execute delivers messages between actors until all Endpoints are closed or the test context is done
-func Execute(t *testing.T, routers map[actors.NodeID]*actors.Router) (Stats, error) {
-	return ExecuteUntil(t, routers, nil)
-}
-
 // combine combines all out channels into one
-func combine(t *testing.T, routers map[actors.NodeID]*actors.Router) chan *messageInTransit {
+func combine(ctx *actors.Context, routers map[actors.NodeID]*actors.Router) chan *messageInTransit {
 	bus := make(chan *messageInTransit)
-	var wg sync.WaitGroup
-
 	for sender, senderRouter := range routers {
-		wg.Add(1)
-		go func() {
-			for msg := range senderRouter.Out() {
-				bus <- &messageInTransit{
-					recipient: msg.Recipient,
-					path:      msg.Path,
-					msg:       actors.NewMessageIn(sender, msg.Payload),
+		ctx.Wg.Go(func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case msg := <-senderRouter.Out():
+					select {
+					case <-ctx.Done():
+						return
+					case bus <- &messageInTransit{
+						recipient: msg.Recipient,
+						path:      msg.Path,
+						msg:       actors.NewMessageIn(sender, msg.Payload),
+					}:
+					}
+
 				}
 			}
-			wg.Done()
-		}()
+		})
 	}
-
-	go func() {
-		wg.Wait()
-		close(bus)
-	}()
-
 	return bus
 }

@@ -42,7 +42,9 @@ func testACSCase(t *testing.T, n, f, silent int) {
 	ccThreshold := f + 1
 
 	// Set up routers / endpoints.
-	peers, routers := actorstest.MakeRouters(t, n)
+	ctx, stop, peers, routers := actorstest.MakeRouters(t, n)
+	defer stop()
+
 	const path = "acs"
 
 	// BLSSig setup for the common coin instances.
@@ -74,18 +76,13 @@ func testACSCase(t *testing.T, n, f, silent int) {
 			nodes[nodeID] = acs
 			// Each node receives a deterministic, node-specific input:
 			vi := fmt.Appendf(nil, "%v-input", nodeID)
-			go func() {
-				acs.Run(t.Context(), vi)
-			}()
+			acs.Run(vi)
 		} else {
-			s := actorstest.NewSilent(endpoint)
-			go func() {
-				_ = s.Run(t.Context())
-			}()
+			actorstest.NewSilent(endpoint).Run()
 		}
 	}
 
-	done := actorstest.ExecuteAndTrack(t, routers, nodes)
+	done := actorstest.ExecuteAndTrack(t, ctx, routers, nodes)
 
 	// Collect outputs from active nodes.
 	results := make(map[actors.NodeID]map[actors.NodeID][]byte)

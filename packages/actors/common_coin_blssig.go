@@ -4,7 +4,6 @@
 package actors
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 
@@ -66,65 +65,54 @@ func NewCommonCoinBLSSig(
 
 // Run executes the common coin protocol until a coin value is decided or the
 // context is canceled. It returns the decided coin value.
-func (cc *CommonCoinBLSSig) Run(ctx context.Context) {
-	defer cc.Endpoint().Close()
+func (cc *CommonCoinBLSSig) Run() {
+	cc.Go(func() {
+		sigShares := make(map[NodeID][]byte)
 
-	sigShares := make(map[NodeID][]byte)
-
-	// Generate own share and broadcast
-	{
-		sigShare, err := tbls.Sign(cc.suite, cc.priShare, cc.sid)
-		if err != nil {
-			cc.LogError(fmt.Errorf("cannot create signature share: %w", err))
-			return
-		}
-		if cc.Endpoint().N() == 1 {
-			// Only one node; decide immediately.
-			coin := makeCoin(sigShare)
-			cc.SetOutput(coin)
-			return
-		}
-		if err := cc.Endpoint().SendToAllButMe(ctx, &msgCCSigShare{s: sigShare}); err != nil {
-			cc.LogError(err)
-			return
-		}
-		sigShares[cc.Endpoint().Me()] = sigShare
-	}
-
-	for {
-		msg, err := cc.Endpoint().Receive(ctx)
-		if err != nil {
-			cc.LogError(err)
-			return
-		}
-		switch payload := msg.Payload.(type) {
-		case *msgCCSigShare:
-			if _, exists := sigShares[msg.Sender]; exists {
-				// Duplicate share from same sender; ignore.
-				continue
-			}
-			sigShares[msg.Sender] = payload.s
-			if len(sigShares) >= cc.t {
-				mainSig, err := tbls.Recover(cc.suite, cc.pubPoly, cc.sid, lo.Values(sigShares), cc.t, cc.Endpoint().N())
-				if err != nil {
-					cc.Log().Warn("CommonCoinBLSSig: signature recovery failed", "error", err)
-					continue
-				}
-				if err := bdn.Verify(cc.suite, cc.pubPoly.Commit(), cc.sid, mainSig); err != nil {
-					cc.Log().Warn("CommonCoinBLSSig: signature verification failed", "error", err)
-					continue
-				}
-				// Decided!
-				cc.SetOutput(makeCoin(mainSig))
+		// Generate own share and broadcast
+		{
+			sigShare := lo.Must(tbls.Sign(cc.suite, cc.priShare, cc.sid))
+			if cc.Endpoint().N() == 1 {
+				// Only one node; decide immediately.
+				coin := makeCoin(sigShare)
+				cc.SetOutput(coin)
 				return
 			}
-		default:
-			cc.Log().Warn("CommonCoinBLSSig: unexpected message",
-				"type", msg.Payload.MsgType(),
-				"sender", msg.Sender.ShortString(),
-			)
+			cc.Endpoint().SendToAllButMe(&msgCCSigShare{s: sigShare})
+			sigShares[cc.Endpoint().Me()] = sigShare
 		}
-	}
+
+		for {
+			msg := cc.Endpoint().Receive()
+			switch payload := msg.Payload.(type) {
+			case *msgCCSigShare:
+				if _, exists := sigShares[msg.Sender]; exists {
+					// Duplicate share from same sender; ignore.
+					continue
+				}
+				sigShares[msg.Sender] = payload.s
+				if len(sigShares) >= cc.t {
+					mainSig, err := tbls.Recover(cc.suite, cc.pubPoly, cc.sid, lo.Values(sigShares), cc.t, cc.Endpoint().N())
+					if err != nil {
+						cc.Log().Warn("CommonCoinBLSSig: signature recovery failed", "error", err)
+						continue
+					}
+					if err := bdn.Verify(cc.suite, cc.pubPoly.Commit(), cc.sid, mainSig); err != nil {
+						cc.Log().Warn("CommonCoinBLSSig: signature verification failed", "error", err)
+						continue
+					}
+					// Decided!
+					cc.SetOutput(makeCoin(mainSig))
+					return
+				}
+			default:
+				cc.Log().Warn("CommonCoinBLSSig: unexpected message",
+					"type", msg.Payload.MsgType(),
+					"sender", msg.Sender.ShortString(),
+				)
+			}
+		}
+	})
 }
 
 func makeCoin(b []byte) bool {

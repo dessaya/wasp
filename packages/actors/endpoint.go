@@ -53,6 +53,10 @@ func NewEndpoint(router *Router, path Path) *Endpoint {
 	}
 }
 
+func (e *Endpoint) Context() *Context {
+	return e.Router.Context()
+}
+
 func (e *Endpoint) N() int {
 	return len(e.Router.Peers)
 }
@@ -71,55 +75,45 @@ func (e *Endpoint) Out() <-chan MessageOut {
 	return e.out
 }
 
-// Close closes the actor Endpoint's out channel, indicating that no more messages will be sent.
-func (e *Endpoint) Close() {
-	close(e.out)
-}
-
 // Receive receives a message for the actor, blocking until a message is available or the context is done.
-func (e *Endpoint) Receive(ctx context.Context) (MessageIn, error) {
+func (e *Endpoint) Receive() MessageIn {
+	ctx := e.Context()
 	select {
 	case <-ctx.Done():
-		return MessageIn{}, ctx.Err()
+		panic(ctx.Err())
 	case msg, ok := <-e.in:
 		if !ok {
-			return MessageIn{}, context.Canceled
+			panic(context.Canceled)
 		}
-		return msg, nil
+		return msg
 	}
 }
 
-// Send sends a message to a peer, returning an error if the context is done or the out channel is full.
-func (e *Endpoint) Send(ctx context.Context, peer NodeID, m MessagePayload) error {
+// Send sends a message to a peer
+func (e *Endpoint) Send(peer NodeID, m MessagePayload) {
+	ctx := e.Context()
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		panic(ctx.Err())
 	case e.out <- NewMessageOut(peer, m):
-		return nil
 	default:
-		return errors.New("cannot send message: transport out channel full")
+		panic(errors.New("cannot send message: endpoint out channel full"))
 	}
 }
 
-// SendToAll sends a message to all peers, returning an error if any send fails.
-func (e *Endpoint) SendToAll(ctx context.Context, m MessagePayload) error {
+// SendToAll sends a message to all peers
+func (e *Endpoint) SendToAll(m MessagePayload) {
 	for _, peer := range e.Router.Peers {
-		if err := e.Send(ctx, peer, m); err != nil {
-			return err
-		}
+		e.Send(peer, m)
 	}
-	return nil
 }
 
-func (e *Endpoint) SendToAllButMe(ctx context.Context, m MessagePayload) error {
+func (e *Endpoint) SendToAllButMe(m MessagePayload) {
 	for _, peer := range e.Router.Peers {
 		if peer != e.Router.Me {
-			if err := e.Send(ctx, peer, m); err != nil {
-				return err
-			}
+			e.Send(peer, m)
 		}
 	}
-	return nil
 }
 
 func (e *Endpoint) Sub(subpath string, args ...any) *Endpoint {

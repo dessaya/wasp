@@ -1,7 +1,6 @@
 package actors
 
 import (
-	"context"
 	"log/slog"
 
 	"github.com/samber/lo"
@@ -49,105 +48,94 @@ func NewACS(
 	}
 }
 
-func (a *ACS) Run(ctx context.Context, vi []byte) {
-	defer a.Endpoint().Close()
-
-	// > Let {RBC_i}_N refer to N instances of the reliable broadcast protocol,
-	// > where P_i is the sender of RBC_i.
-	rbcs := make([]*ReliableBroadcast, a.Endpoint().N())
-	rbcDone := make(chan int)
-	for i, nid := range a.Endpoint().Router.Peers {
-		rbc := NewReliableBroadcast(a.Endpoint().Sub("rbc:%d", i), a.f, nid, a.Log())
-		go func() {
+func (a *ACS) Run(vi []byte) {
+	a.Go(func() {
+		// > Let {RBC_i}_N refer to N instances of the reliable broadcast protocol,
+		// > where P_i is the sender of RBC_i.
+		rbcs := make([]*ReliableBroadcast, a.Endpoint().N())
+		rbcDone := make(chan int)
+		for i, nid := range a.Endpoint().Router.Peers {
+			rbc := NewReliableBroadcast(a.Endpoint().Sub("rbc:%d", i), a.f, nid, a.Log())
 			if nid == a.Endpoint().Me() {
 				// >   • upon receiving input v_i, input v_i to RBC_i
-				rbc.Broadcast(ctx, vi)
+				rbc.Broadcast(vi)
 			} else {
-				rbc.Receive(ctx)
+				rbc.Receive()
 			}
-		}()
-		go func() {
-			_, err := WaitSubActor(ctx, a, rbc)
-			if err != nil {
+			a.Context().Wg.Go(func() {
+				_ = WaitOutput(a.Context(), rbc)
+				rbcDone <- i
+			})
+			rbcs[i] = rbc
+		}
+
+		// > Let {BA_i}_N refer to N instances
+		// > of the binary byzantine agreement protocol.
+		abas := make([]*BinaryAgreement, a.Endpoint().N())
+		abaDone := make(chan int)
+		startABA := func(i int, input bool) {
+			aba := NewBinaryAgreement(a.Endpoint().Sub("aba:%d", i), a.f, a.makeCC, a.Log())
+			aba.Run(input)
+			a.Context().Wg.Go(func() {
+				_ = WaitOutput(a.Context(), aba)
+				abaDone <- i
+			})
+			abas[i] = aba
+		}
+
+		abaResults := make(map[int]bool)
+		checkOutput := func() {
+			if a.Output().IsReady() {
 				return
 			}
-			rbcDone <- i
-		}()
-		rbcs[i] = rbc
-	}
 
-	// > Let {BA_i}_N refer to N instances
-	// > of the binary byzantine agreement protocol.
-	abas := make([]*BinaryAgreement, a.Endpoint().N())
-	abaDone := make(chan int)
-	startABA := func(i int, input bool) {
-		aba := NewBinaryAgreement(a.Endpoint().Sub("aba:%d", i), a.f, a.makeCC, a.Log())
-		go func() {
-			aba.Run(ctx, input)
-		}()
-		go func() {
-			_, err := WaitSubActor(ctx, a, aba)
-			if err != nil {
-				return
-			}
-			abaDone <- i
-		}()
-		abas[i] = aba
-	}
-
-	abaResults := make(map[int]bool)
-	checkOutput := func() {
-		if a.Output().IsReady() {
-			return
-		}
-
-		// >   • once all instances of BA have completed, let C ⊂ [1..N] be the
-		// >     indexes of each BA that delivered 1. Wait for the output v_j for
-		// >     each RBC_j such that j ∈ C. Finally output ∪_{j∈C} v_j.
-		if len(abaResults) >= a.Endpoint().N() {
-			ret := make(map[NodeID][]byte)
-			for i, val := range abaResults {
-				if val {
-					if !rbcs[i].Output().IsReady() {
-						return
-					}
-					rbcOut := rbcs[i].Output().MustGet()
-					ret[a.Endpoint().Router.Peers[i]] = rbcOut
-				}
-			}
-			a.Log().Info("ACS done", "count", len(ret))
-			a.SetOutput(ret)
-		}
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			a.LogError(ctx.Err())
-			return
-		case j := <-rbcDone:
-			// >   • upon delivery of v_j from RBC_j, if input has not yet been
-			// >     provided to BA_j, then provide input 1 to BA_j.
-			a.Log().Info("RBC done", "i", j)
-			if abas[j] == nil {
-				startABA(j, true)
-			}
-			checkOutput()
-		case i := <-abaDone:
-			// >   • upon delivery of value 1 from at least N − f instances of BA,
-			// >     provide input 0 to each instance of BA that has not yet been
-			// >     provided input.
-			abaOut := abas[i].Output().MustGet()
-			abaResults[i] = abaOut
-			a.Log().Info("ABA done", "aba_done", len(abaResults))
-			if lo.Count(lo.Values(abaResults), true) == a.Endpoint().N()-a.f {
-				for i, aba := range abas {
-					if aba == nil {
-						startABA(i, false)
+			// >   • once all instances of BA have completed, let C ⊂ [1..N] be the
+			// >     indexes of each BA that delivered 1. Wait for the output v_j for
+			// >     each RBC_j such that j ∈ C. Finally output ∪_{j∈C} v_j.
+			if len(abaResults) >= a.Endpoint().N() {
+				ret := make(map[NodeID][]byte)
+				for i, val := range abaResults {
+					if val {
+						if !rbcs[i].Output().IsReady() {
+							return
+						}
+						rbcOut := rbcs[i].Output().MustGet()
+						ret[a.Endpoint().Router.Peers[i]] = rbcOut
 					}
 				}
+				a.Log().Info("ACS done", "count", len(ret))
+				a.SetOutput(ret)
 			}
-			checkOutput()
 		}
-	}
+
+		for {
+			select {
+			case <-a.Context().Done():
+				panic(a.Context().Err())
+			case j := <-rbcDone:
+				// >   • upon delivery of v_j from RBC_j, if input has not yet been
+				// >     provided to BA_j, then provide input 1 to BA_j.
+				a.Log().Info("RBC done", "i", j)
+				if abas[j] == nil {
+					startABA(j, true)
+				}
+				checkOutput()
+			case i := <-abaDone:
+				// >   • upon delivery of value 1 from at least N − f instances of BA,
+				// >     provide input 0 to each instance of BA that has not yet been
+				// >     provided input.
+				abaOut := abas[i].Output().MustGet()
+				abaResults[i] = abaOut
+				a.Log().Info("ABA done", "aba_done", len(abaResults))
+				if lo.Count(lo.Values(abaResults), true) == a.Endpoint().N()-a.f {
+					for i, aba := range abas {
+						if aba == nil {
+							startABA(i, false)
+						}
+					}
+				}
+				checkOutput()
+			}
+		}
+	})
 }

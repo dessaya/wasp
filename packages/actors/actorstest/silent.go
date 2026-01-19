@@ -1,32 +1,28 @@
 package actorstest
 
 import (
-	"context"
+	"log/slog"
 
 	"github.com/iotaledger/wasp/v2/packages/actors"
 )
 
 // Silent is an actor that drops all incoming messages and never produces any output.
 type Silent struct {
+	actors.Actor[struct{}]
 	endpoint *actors.Endpoint
 }
 
 func NewSilent(endpoint *actors.Endpoint) *Silent {
 	return &Silent{
+		Actor:    actors.NewActor[struct{}](endpoint, slog.Default()),
 		endpoint: endpoint,
 	}
 }
 
-func (s *Silent) Endpoint() *actors.Endpoint {
-	return s.endpoint
-}
-
-func (s *Silent) Run(ctx context.Context) error {
-	s.endpoint.Close()
-	for {
-		_, err := s.endpoint.Receive(ctx)
-		if err != nil {
-			return err
+func (s *Silent) Run() {
+	s.Go(func() {
+		for {
+			s.endpoint.Receive()
 		}
-	}
+	})
 }

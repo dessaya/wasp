@@ -39,7 +39,9 @@ func TestCommonCoinBLSSig(t *testing.T) {
 }
 
 func testCommonCoinCase(t *testing.T, n, threshold, silent int) {
-	peers, routers := actorstest.MakeRouters(t, n)
+	ctx, stop, peers, routers := actorstest.MakeRouters(t, n)
+	defer stop()
+
 	const path = "cc"
 	suite := tcrypto.DefaultBLSSuite()
 	_, pubPoly, priShares := testpeers.MakeSharedSecret(suite, n, threshold)
@@ -53,19 +55,14 @@ func testCommonCoinCase(t *testing.T, n, threshold, silent int) {
 			// fair node
 			node := actors.NewCommonCoinBLSSig(endpoint, threshold, suite, pubPoly, priShares[i], sid, slog.Default())
 			nodes[nodeID] = node
-			go func() {
-				node.Run(t.Context())
-			}()
+			node.Run()
 		} else {
 			// silent node
-			s := actorstest.NewSilent(endpoint)
-			go func() {
-				_ = s.Run(t.Context())
-			}()
+			actorstest.NewSilent(endpoint).Run()
 		}
 	}
 
-	done := actorstest.ExecuteAndTrack(t, routers, nodes)
+	done := actorstest.ExecuteAndTrack(t, ctx, routers, nodes)
 
 	var coins []bool
 	for range active {

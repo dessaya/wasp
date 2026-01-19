@@ -1,7 +1,6 @@
 package actors
 
 import (
-	"context"
 	"sync"
 )
 
@@ -13,63 +12,58 @@ type Router struct {
 	Peers []NodeID
 	// mu protects open & closed
 	mu sync.RWMutex
-	// open is the set of currently active endpoints
-	open map[Path]*Endpoint
-	// closed is the set of closed endpoints (which might still receive
-	// messages from other nodes)
-	closed map[Path]*Endpoint
+	// endpoints is the set of currently active endpoints
+	endpoints map[Path]*Endpoint
 	// out is the channel that delivers outgoing messages from all endpoints
 	out chan MessageOutWithPath
 	// ctx is the context for managing goroutines
-	ctx context.Context
+	ctx *Context
 }
 
-func NewRouter(ctx context.Context, me NodeID, peers []NodeID) *Router {
+func NewRouter(ctx *Context, me NodeID, peers []NodeID) *Router {
 	return &Router{
-		Me:     me,
-		Peers:  peers,
-		open:   make(map[Path]*Endpoint),
-		closed: make(map[Path]*Endpoint),
-		out:    make(chan MessageOutWithPath),
-		ctx:    ctx,
+		Me:        me,
+		Peers:     peers,
+		endpoints: make(map[Path]*Endpoint),
+		out:       make(chan MessageOutWithPath),
+		ctx:       ctx,
 	}
+}
+
+func (r *Router) Context() *Context {
+	return r.ctx
 }
 
 // GetEndpoint returns the Endpoint for the given Path, creating it if necessary.
 func (r *Router) GetEndpoint(path Path) *Endpoint {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if endpoint := r.closed[path]; endpoint != nil {
-		return endpoint
-	}
-	if endpoint := r.open[path]; endpoint != nil {
+	if endpoint := r.endpoints[path]; endpoint != nil {
 		return endpoint
 	}
 	endpoint := NewEndpoint(r, path)
-	r.open[path] = endpoint
-	go r.endpointWorker(endpoint)
+	r.endpoints[path] = endpoint
+	r.ctx.Wg.Go(func() { r.endpointWorker(endpoint) })
 	return endpoint
 }
 
 // endpointWorker forwards outgoing messages from the endpoint to the router's out channel.
 func (r *Router) endpointWorker(endpoint *Endpoint) {
-	for msg := range endpoint.out {
+	for {
 		select {
-		case r.out <- MessageOutWithPath{
-			MessageOut: msg,
-			Path:       endpoint.Path,
-		}:
 		case <-r.ctx.Done():
 			return
+		case msg := <-endpoint.out:
+			select {
+			case <-r.ctx.Done():
+				return
+			case r.out <- MessageOutWithPath{
+				MessageOut: msg,
+				Path:       endpoint.Path,
+			}:
+			}
 		}
 	}
-	r.mu.Lock()
-	delete(r.open, endpoint.Path)
-	r.closed[endpoint.Path] = endpoint
-	if len(r.open) == 0 {
-		close(r.out)
-	}
-	r.mu.Unlock()
 }
 
 // Out returns the channel for collecting outgoing messages from all endpoints.

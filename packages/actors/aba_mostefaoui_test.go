@@ -65,7 +65,8 @@ func testABA(t *testing.T, n, f int, silent int, input func() bool, expected *bo
 	threshold := f + 1
 	active := n - silent
 
-	peers, routers := actorstest.MakeRouters(t, n)
+	ctx, stop, peers, routers := actorstest.MakeRouters(t, n)
+	defer stop()
 
 	suite := tcrypto.DefaultBLSSuite()
 	_, pubPoly, priShares := testpeers.MakeSharedSecret(suite, n, threshold)
@@ -97,20 +98,15 @@ func testABA(t *testing.T, n, f int, silent int, input func() bool, expected *bo
 				makeCC,
 				slog.Default(),
 			)
-			go func() {
-				aba.Run(t.Context(), input())
-			}()
+			aba.Run(input())
 			abas[nodeID] = aba
 		} else {
 			// silent node
-			s := actorstest.NewSilent(endpoint)
-			go func() {
-				_ = s.Run(t.Context())
-			}()
+			actorstest.NewSilent(endpoint).Run()
 		}
 	}
 
-	done := actorstest.ExecuteAndTrack(t, routers, abas)
+	done := actorstest.ExecuteAndTrack(t, ctx, routers, abas)
 
 	// Collect outputs from all active nodes.
 	results := make(map[actors.NodeID]bool, active)

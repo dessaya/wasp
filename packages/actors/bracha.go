@@ -4,7 +4,6 @@
 package actors
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 
@@ -86,33 +85,33 @@ func NewReliableBroadcast(
 }
 
 // Broadcast implements the reliable broadcast algorithm from the broadcaster's side.
-func (r *ReliableBroadcast) Broadcast(ctx context.Context, m []byte) {
-	//	01: // only broadcaster node
-	//	02: input 𝑀
-	//	03: send ⟨PROPOSE, 𝑀⟩ to all
+func (r *ReliableBroadcast) Broadcast(m []byte) {
 	if r.Endpoint().Me() != r.broadcaster {
 		panic("only broadcaster can call Broadcast")
 	}
-	if err := r.Endpoint().SendToAll(ctx, &msgPropose{m: m}); err != nil {
-		r.LogError(err)
-		return
-	}
-	r.Receive(ctx)
+	r.Go(func() {
+		//	01: // only broadcaster node
+		//	02: input 𝑀
+		//	03: send ⟨PROPOSE, 𝑀⟩ to all
+		r.Endpoint().SendToAll(&msgPropose{m: m})
+		r.receive()
+	})
 }
 
 // Receive implements the reliable broadcast algorithm for all nodes.
-func (r *ReliableBroadcast) Receive(ctx context.Context) {
-	defer r.Endpoint().Close()
+func (r *ReliableBroadcast) Receive() {
+	r.Go(func() {
+		r.receive()
+	})
+}
 
+func (r *ReliableBroadcast) receive() {
 	readySent := false
-	sendReady := func(m []byte) error {
+	sendReady := func(m []byte) {
 		if !readySent {
-			if err := r.Endpoint().SendToAll(ctx, &msgReady{m: m}); err != nil {
-				return err
-			}
+			r.Endpoint().SendToAll(&msgReady{m: m})
 			readySent = true
 		}
-		return nil
 	}
 
 	echoCounters := make(map[hashing.HashValue]map[NodeID]bool)
@@ -128,11 +127,7 @@ func (r *ReliableBroadcast) Receive(ctx context.Context) {
 	}
 
 	for {
-		msg, err := r.Endpoint().Receive(ctx)
-		if err != nil {
-			r.LogError(err)
-			return
-		}
+		msg := r.Endpoint().Receive()
 		switch payload := msg.Payload.(type) {
 		//	06: upon receiving ⟨PROPOSE, 𝑀⟩ from the broadcaster do
 		//	07:     if 𝑃(𝑀) then // (ignoring predicate in this implementation)
@@ -142,10 +137,7 @@ func (r *ReliableBroadcast) Receive(ctx context.Context) {
 				r.Log().Warn("RBC: ignoring PROPOSE from non-broadcaster", "sender", msg.Sender.String())
 				continue
 			}
-			if err := r.Endpoint().SendToAll(ctx, &msgEcho{m: payload.m}); err != nil {
-				r.LogError(err)
-				return
-			}
+			r.Endpoint().SendToAll(&msgEcho{m: payload.m})
 
 		//	09: upon receiving 2𝑡 + 1 ⟨ECHO, 𝑀⟩ messages and not having sent a READY message do
 		//	10:     send ⟨READY, 𝑀⟩ to all
@@ -154,10 +146,7 @@ func (r *ReliableBroadcast) Receive(ctx context.Context) {
 			if !echoReceived[msg.Sender] {
 				echoReceived[msg.Sender] = true
 				if len(echoReceived) == 2*r.f+1 {
-					if err := sendReady(payload.m); err != nil {
-						r.LogError(err)
-						return
-					}
+					sendReady(payload.m)
 				}
 			}
 
@@ -173,10 +162,7 @@ func (r *ReliableBroadcast) Receive(ctx context.Context) {
 				case 2*r.f + 1:
 					r.SetOutput(payload.m)
 				case r.f + 1:
-					if err := sendReady(payload.m); err != nil {
-						r.LogError(err)
-						return
-					}
+					sendReady(payload.m)
 				}
 			}
 

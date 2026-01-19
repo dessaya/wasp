@@ -1,7 +1,6 @@
 package actors
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 
@@ -98,72 +97,65 @@ func NewBinaryAgreement(
 	}
 }
 
-func (aba *BinaryAgreement) Run(ctx context.Context, input bool) {
-	defer aba.Endpoint().Close()
-
-	// special case: if there's only one node, decide immediately
-	if aba.Endpoint().N() == 1 {
-		aba.SetOutput(input)
-		return
-	}
-
-	// here we buffer incoming messages per-round; this is necessary
-	// since a message for round r' could arrive before all messages for
-	// round r have been processed
-	incoming := map[int][]MessageIn{}
-
-	// > upon receiving input b_input, set est_0 := b_input and proceed as
-	// > follows in consecutive epochs, with increasing labels r:
-	est := input
-	lastOutputRound := -1
-	for r := 0; ; r++ {
-		vals, err := aba.doRound(ctx, r, est, incoming)
-		if err != nil {
-			aba.LogError(err)
+func (aba *BinaryAgreement) Run(input bool) {
+	aba.Go(func() {
+		// special case: if there's only one node, decide immediately
+		if aba.Endpoint().N() == 1 {
+			aba.SetOutput(input)
 			return
 		}
 
-		// > s ← Coin_r.GetCoin()
-		cc := aba.makeCC(r, aba.Endpoint().Router.GetEndpoint(aba.Endpoint().Path.Sub("cc%d", r)))
-		go func() { cc.Run(ctx) }()
-		s, err := WaitSubActor(ctx, aba, cc)
-		if err != nil {
-			return
-		}
+		// here we buffer incoming messages per-round; this is necessary
+		// since a message for round r' could arrive before all messages for
+		// round r have been processed
+		incoming := map[int][]MessageIn{}
 
-		// > continue looping until both a value b is output in some round r,
-		// > and the value Coin_r' = b for some round r' > r.
-		if lastOutputRound >= 0 && r > lastOutputRound && aba.Output().IsReady() {
-			if s == aba.Output().MustGet() {
-				return
+		// > upon receiving input b_input, set est_0 := b_input and proceed as
+		// > follows in consecutive epochs, with increasing labels r:
+		est := input
+		lastOutputRound := -1
+		for r := 0; ; r++ {
+			vals := aba.doRound(r, est, incoming)
+
+			// > s ← Coin_r.GetCoin()
+			cc := aba.makeCC(r, aba.Endpoint().Router.GetEndpoint(aba.Endpoint().Path.Sub("cc%d", r)))
+			cc.Run()
+			s := WaitOutput(aba.Context(), cc)
+
+			// > continue looping until both a value b is output in some round r,
+			// > and the value Coin_r' = b for some round r' > r.
+			if lastOutputRound >= 0 && r > lastOutputRound && aba.Output().IsReady() {
+				if s == aba.Output().MustGet() {
+					return
+				}
+			}
+
+			// > if vals = {b}, then
+			// >     · est_r+1 := b
+			// >     · if (b = s%2) then output b
+			// > else est_r+1 := s%2
+			if len(vals) == 1 {
+				b := vals[0]
+				est = b
+				if b == s {
+					lastOutputRound = r
+					aba.SetOutput(b)
+				}
+			} else {
+				est = s
 			}
 		}
-
-		// > if vals = {b}, then
-		// >     · est_r+1 := b
-		// >     · if (b = s%2) then output b
-		// > else est_r+1 := s%2
-		if len(vals) == 1 {
-			b := vals[0]
-			est = b
-			if b == s {
-				lastOutputRound = r
-				aba.SetOutput(b)
-			}
-		} else {
-			est = s
-		}
-	}
+	})
 }
 
-func (aba *BinaryAgreement) doRound(ctx context.Context, r int, est bool, incoming map[int][]MessageIn) ([]bool, error) {
+func (aba *BinaryAgreement) doRound(r int, est bool, incoming map[int][]MessageIn) []bool {
 	sentBVAL := map[bool]struct{}{}
-	sendBVALOnce := func(b bool) error {
+	sendBVALOnce := func(b bool) {
 		if _, ok := sentBVAL[b]; ok {
-			return nil
+			return
 		}
 		sentBVAL[b] = struct{}{}
-		return aba.Endpoint().SendToAll(ctx, &msgABA{msgType: abaMsgTypeBVAL, round: r, b: b})
+		aba.Endpoint().SendToAll(&msgABA{msgType: abaMsgTypeBVAL, round: r, b: b})
 	}
 
 	receivedBVAL := map[bool]map[NodeID]struct{}{}
@@ -177,17 +169,13 @@ func (aba *BinaryAgreement) doRound(ctx context.Context, r int, est bool, incomi
 	receivedAUX := map[NodeID]bool{}
 
 	// >     – multicast BVAL_r(est_r)
-	if err := sendBVALOnce(est); err != nil {
-		return nil, err
-	}
+	sendBVALOnce(est)
 
 	// > bin_values_r := {}
 	binValues := map[bool]bool{}
 
 	for {
-		if err := aba.receiveMessage(ctx, incoming); err != nil {
-			return nil, err
-		}
+		aba.receiveMessage(incoming)
 		// process all pending messages for this round
 		msgs := incoming[r]
 		incoming[r] = nil
@@ -200,18 +188,14 @@ func (aba *BinaryAgreement) doRound(ctx context.Context, r int, est bool, incomi
 				// > upon receiving BVAL_r(b) messages from f + 1 nodes, if
 				// > BVAL_r(b) has not been sent, multicast BVAL_r(b)
 				if len(receivedBVAL[m.b]) == aba.f+1 {
-					if err := sendBVALOnce(m.b); err != nil {
-						return nil, err
-					}
+					sendBVALOnce(m.b)
 				}
 				// > upon receiving BVAL_r(b) messages from 2f + 1 nodes,
 				if len(receivedBVAL[m.b]) == 2*aba.f+1 {
 					if len(binValues) == 0 {
 						// > wait until bin_values_r != {}, then
 						// > multicast AUX_r(w) where w ∈ bin_values_r
-						if err := aba.Endpoint().SendToAll(ctx, &msgABA{msgType: abaMsgTypeAUX, round: r, b: m.b}); err != nil {
-							return nil, err
-						}
+						aba.Endpoint().SendToAll(&msgABA{msgType: abaMsgTypeAUX, round: r, b: m.b})
 					}
 					// > bin_values_r := bin_values_r ∪ {b}
 					binValues[m.b] = true
@@ -233,17 +217,14 @@ func (aba *BinaryAgreement) doRound(ctx context.Context, r int, est bool, incomi
 			// > arrival of either an AUX_r or a BVAL_r message)
 			vals := lo.Uniq(lo.Values(receivedAUX))
 			if len(binValues) > 0 && len(receivedAUX) >= aba.Endpoint().N()-aba.f && lo.Every(lo.Keys(binValues), vals) {
-				return vals, nil
+				return vals
 			}
 		}
 	}
 }
 
-func (aba *BinaryAgreement) receiveMessage(ctx context.Context, incoming map[int][]MessageIn) error {
-	msg, err := aba.Endpoint().Receive(ctx)
-	if err != nil {
-		return err
-	}
+func (aba *BinaryAgreement) receiveMessage(incoming map[int][]MessageIn) {
+	msg := aba.Endpoint().Receive()
 	switch m := msg.Payload.(type) {
 	case *msgABA:
 		// classify message per-round
@@ -251,5 +232,4 @@ func (aba *BinaryAgreement) receiveMessage(ctx context.Context, incoming map[int
 	default:
 		aba.Log().Warn("Received unknown message type", "type", fmt.Sprintf("%T", m))
 	}
-	return nil
 }

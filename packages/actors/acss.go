@@ -1,7 +1,6 @@
 package actors
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 
@@ -181,95 +180,78 @@ func (a *ACSS) MakeDealFromSecret(secret kyber.Scalar) *crypto.Deal {
 
 // ShareDeal implements the dealer's part of the ACSS protocol, which shares the
 // given secret with all parties.
-func (a *ACSS) ShareDeal(ctx context.Context, deal *crypto.Deal) {
-	defer a.Endpoint().Close()
-
-	data, err := deal.MarshalBinary()
-	if err != nil {
-		panic(fmt.Sprintf("acss: internal error: %v", err))
-	}
-	if a.Endpoint().N() == 1 {
-		// shortcut for n=1
-		secret := crypto.Secret(a.suite, deal.PubKey, a.mySK)
-		priShare, err := crypto.DecryptShare(a.suite, deal, a.myIndex, secret)
-		if err != nil {
-			a.LogError(fmt.Errorf("ACSS: decryption failed: %w", err))
+func (a *ACSS) ShareDeal(deal *crypto.Deal) {
+	a.Go(func() {
+		data := lo.Must(deal.MarshalBinary())
+		if a.Endpoint().N() == 1 {
+			// shortcut for n=1
+			secret := crypto.Secret(a.suite, deal.PubKey, a.mySK)
+			priShare := lo.Must(crypto.DecryptShare(a.suite, deal, a.myIndex, secret))
+			a.SetOutput(&ACSSOutput{
+				PriShare: priShare,
+				Commits:  deal.Commits,
+			})
 			return
 		}
-		a.SetOutput(&ACSSOutput{
-			PriShare: priShare,
-			Commits:  deal.Commits,
+		// > RBC(C||E)
+		rbcOut := a.runRBC(a.Endpoint().Me(), func(rbc *ReliableBroadcast) {
+			rbc.Broadcast(data)
 		})
-		return
-	}
-	// > RBC(C||E)
-	rbcOut, err := a.runRBC(ctx, a.Endpoint().Me(), func(ctx context.Context, rbc *ReliableBroadcast) {
-		rbc.Broadcast(ctx, data)
+		a.mainLoop(rbcOut)
 	})
-	if err != nil {
-		return
-	}
-	a.mainLoop(ctx, rbcOut)
 }
 
 // Receive implements the receiver's part of the ACSS protocol, which receives
 // the shared secret from the dealer.
-func (a *ACSS) Receive(ctx context.Context, dealer NodeID) {
-	defer a.Endpoint().Close()
-
+func (a *ACSS) Receive(dealer NodeID) {
 	if a.Endpoint().Me() == dealer {
-		a.LogError(fmt.Errorf("dealer cannot call Receive"))
-		return
+		panic(fmt.Errorf("dealer cannot call Receive"))
 	}
-	// > // party i (including the dealer)
-	// > RBC(C||E)
-	rbcOut, err := a.runRBC(ctx, dealer, func(ctx context.Context, rbc *ReliableBroadcast) {
-		rbc.Receive(ctx)
+	a.Go(func() {
+		// > // party i (including the dealer)
+		// > RBC(C||E)
+		rbcOut := a.runRBC(dealer, func(rbc *ReliableBroadcast) {
+			rbc.Receive()
+		})
+		a.mainLoop(rbcOut)
 	})
-	if err != nil {
-		return
-	}
-	a.mainLoop(ctx, rbcOut)
 }
 
-func (a *ACSS) runRBC(ctx context.Context, dealer NodeID, f func(ctx context.Context, rbc *ReliableBroadcast)) ([]byte, error) {
+func (a *ACSS) runRBC(dealer NodeID, f func(rbc *ReliableBroadcast)) []byte {
 	rbc := NewReliableBroadcast(a.Endpoint().Sub("rbc"), a.f, dealer, a.Log())
-	go func() { f(ctx, rbc) }()
-	return WaitSubActor(ctx, a, rbc)
+	f(rbc)
+	return WaitOutput(a.Context(), rbc)
 }
 
-func (a *ACSS) mainLoop(ctx context.Context, rbcOut []byte) {
+func (a *ACSS) mainLoop(rbcOut []byte) {
 	broadcastOk := func() {
-		a.Endpoint().SendToAll(ctx, &msgACSSOk{})
+		a.Endpoint().SendToAll(&msgACSSOk{})
 	}
 
 	readySent := false
 	broadcastReady := func() {
 		if !readySent {
 			readySent = true
-			a.Endpoint().SendToAll(ctx, &msgACSSReady{})
+			a.Endpoint().SendToAll(&msgACSSReady{})
 		}
 	}
 
 	broadcastImplicate := func(dealerPublic kyber.Point, err error) {
 		a.Log().Warn("ACSS: broadcasting IMPLICATE", "error", err)
-		a.Endpoint().SendToAll(ctx, &msgACSSImplicate{
+		a.Endpoint().SendToAll(&msgACSSImplicate{
 			DLEQProof: crypto.Implicate(a.suite, dealerPublic, a.mySK),
 		})
 	}
 
 	broadcastRecover := func(dealerPublic kyber.Point) {
-		a.Endpoint().SendToAll(ctx, &msgACSSRecover{
+		a.Endpoint().SendToAll(&msgACSSRecover{
 			RecoverySecret: crypto.Secret(a.suite, dealerPublic, a.mySK),
 		})
 	}
 
 	// > // party i (including the dealer)
-	deal, err := crypto.DealUnmarshalBinary(a.suite, a.Endpoint().N(), rbcOut)
-	if err != nil {
-		a.LogError(fmt.Errorf("ACSS: invalid RBC output: %w", err))
-		return
-	}
+	deal := lo.Must(crypto.DealUnmarshalBinary(a.suite, a.Endpoint().N(), rbcOut))
+
 	// > sᵢ := PKI.Dec(eᵢ, skᵢ)
 	// > if decrypt fails or VSS.Verify(C, i, sᵢ) == false:
 	// >   send <IMPLICATE, i, skᵢ> to all parties
@@ -289,11 +271,7 @@ func (a *ACSS) mainLoop(ctx context.Context, rbcOut []byte) {
 	recoverReceived := make(map[NodeID]*share.PriShare)
 
 	for {
-		msg, err := a.Endpoint().Receive(ctx)
-		if err != nil {
-			a.LogError(fmt.Errorf("ACSS: Receive failed: %w", err))
-			return
-		}
+		msg := a.Endpoint().Receive()
 
 		switch m := msg.Payload.(type) {
 		case *msgACSSOk:

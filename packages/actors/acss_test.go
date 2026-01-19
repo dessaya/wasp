@@ -57,7 +57,9 @@ func runACSSTest(t *testing.T, n, f int, silent int, faultyDeals int) {
 	suite := tcrypto.DefaultEd25519Suite()
 	secret := suite.Scalar().Pick(suite.RandomStream())
 
-	peers, routers := actorstest.MakeRouters(t, n)
+	ctx, stop, peers, routers := actorstest.MakeRouters(t, n)
+	defer stop()
+
 	pubKeys := make(map[actors.NodeID]kyber.Point)
 	sks := make(map[actors.NodeID]kyber.Scalar)
 
@@ -76,29 +78,24 @@ func runACSSTest(t *testing.T, n, f int, silent int, faultyDeals int) {
 		endpoint := routers[nid].GetEndpoint(actors.Path("acss"))
 		if isValidNode(i) {
 			acssActor := actors.NewACSS(endpoint, f, suite, pubKeys, sks[nid], slog.Default().With("nodeID", nid.ShortString()))
-			go func() {
-				if nid == dealer {
-					deal := acssActor.MakeDealFromSecret(secret)
-					for range faultyDeals {
-						// corrupt deal
-						deal.Shares[i][0]++
-					}
-					acssActor.ShareDeal(t.Context(), deal)
-				} else {
-					acssActor.Receive(t.Context(), dealer)
+			if nid == dealer {
+				deal := acssActor.MakeDealFromSecret(secret)
+				for range faultyDeals {
+					// corrupt deal
+					deal.Shares[i][0]++
 				}
-			}()
+				acssActor.ShareDeal(deal)
+			} else {
+				acssActor.Receive(dealer)
+			}
 			nodes[nid] = acssActor
 		} else {
 			// silent nodes do nothing
-			silentActor := actorstest.NewSilent(endpoint)
-			go func() {
-				_ = silentActor.Run(t.Context())
-			}()
+			actorstest.NewSilent(endpoint).Run()
 		}
 	}
 
-	done := actorstest.ExecuteAndTrack(t, routers, nodes)
+	done := actorstest.ExecuteAndTrack(t, ctx, routers, nodes)
 
 	var priShares []*share.PriShare
 	for range validRange {
