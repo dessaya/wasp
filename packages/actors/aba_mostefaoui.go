@@ -48,7 +48,7 @@ import (
 // > • continue looping until both a value b is output in some round r,
 // >   and the value Coin_r' = b for some round r' > r.
 
-type MakeCommonCoinFunc func(round int, endpoint *Endpoint) *CommonCoinBLSSig
+type MakeCommonCoinFunc func(endpoint *Endpoint, sidSuffix string) *CommonCoinBLSSig
 
 type BinaryAgreement struct {
 	Actor[bool]
@@ -118,7 +118,8 @@ func (aba *BinaryAgreement) Run(input bool) {
 			vals := aba.doRound(r, est, incoming)
 
 			// > s ← Coin_r.GetCoin()
-			cc := aba.makeCC(r, aba.Endpoint().Router.GetEndpoint(aba.Endpoint().Path.Sub("cc%d", r)))
+			sidSuffix := fmt.Sprintf("%d", r)
+			cc := aba.makeCC(aba.Endpoint().Router.GetEndpoint(aba.Endpoint().Path.Sub("cc%d", r)), sidSuffix)
 			cc.Run()
 			s := WaitOutput(aba.Context(), cc)
 
@@ -175,7 +176,9 @@ func (aba *BinaryAgreement) doRound(r int, est bool, incoming map[int][]MessageI
 	binValues := map[bool]bool{}
 
 	for {
-		aba.receiveMessage(incoming)
+		aba.receiveMessage(incoming, func() {
+			aba.Log().Info("status", "output", aba.Output().String(), "sentBVAL", len(sentBVAL), "receivedBVAL", len(receivedBVAL), "receivedAUX", len(receivedAUX), "binValues", len(binValues))
+		})
 		// process all pending messages for this round
 		msgs := incoming[r]
 		incoming[r] = nil
@@ -223,8 +226,8 @@ func (aba *BinaryAgreement) doRound(r int, est bool, incoming map[int][]MessageI
 	}
 }
 
-func (aba *BinaryAgreement) receiveMessage(incoming map[int][]MessageIn) {
-	msg := aba.Endpoint().Receive()
+func (aba *BinaryAgreement) receiveMessage(incoming map[int][]MessageIn, onStatus func()) {
+	msg := aba.Endpoint().Receive(onStatus)
 	switch m := msg.Payload.(type) {
 	case *msgABA:
 		// classify message per-round

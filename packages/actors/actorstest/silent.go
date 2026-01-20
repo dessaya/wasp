@@ -22,7 +22,7 @@ func NewSilent(endpoint *actors.Endpoint) *Silent {
 func (s *Silent) Run() {
 	s.Go(func() {
 		for {
-			s.endpoint.Receive()
+			s.endpoint.Receive(nil)
 		}
 	})
 }

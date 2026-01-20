@@ -271,7 +271,9 @@ func (a *ACSS) mainLoop(rbcOut []byte) {
 	recoverReceived := make(map[NodeID]*share.PriShare)
 
 	for {
-		msg := a.Endpoint().Receive()
+		msg := a.Endpoint().Receive(func() {
+			a.Log().Info("status", "output", a.Output().String(), "okReceived", len(okReceived), "readyReceived", len(readyReceived), "implicateReceived", len(implicateReceived), "recoverReceived", len(recoverReceived))
+		})
 
 		switch m := msg.Payload.(type) {
 		case *msgACSSOk:

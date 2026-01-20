@@ -43,6 +43,14 @@ func (a *actor[T]) SetOutput(value T) {
 	a.output.Set(value)
 }
 
+func WaitOutputReady[S any](ctx *Context, sub Actor[S]) {
+	select {
+	case <-ctx.Done():
+		panic(ctx.Err())
+	case <-sub.Output().ReadyChan():
+	}
+}
+
 func WaitOutput[S any](ctx *Context, sub Actor[S]) (output S) {
 	select {
 	case <-ctx.Done():

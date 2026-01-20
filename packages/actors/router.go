@@ -70,3 +70,9 @@ func (r *Router) endpointWorker(endpoint *Endpoint) {
 func (r *Router) Out() <-chan MessageOutWithPath {
 	return r.out
 }
+
+func (r *Router) LogStatus() {
+	for _, endpoint := range r.endpoints {
+		endpoint.LogStatus()
+	}
+}

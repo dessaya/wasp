@@ -1,6 +1,7 @@
 package actors
 
 import (
+	"fmt"
 	"log/slog"
 
 	"github.com/samber/lo"
@@ -63,7 +64,7 @@ func (a *ACS) Run(vi []byte) {
 				rbc.Receive()
 			}
 			a.Context().Wg.Go(func() {
-				_ = WaitOutput(a.Context(), rbc)
+				WaitOutputReady(a.Context(), rbc)
 				rbcDone <- i
 			})
 			rbcs[i] = rbc
@@ -74,10 +75,13 @@ func (a *ACS) Run(vi []byte) {
 		abas := make([]*BinaryAgreement, a.Endpoint().N())
 		abaDone := make(chan int)
 		startABA := func(i int, input bool) {
-			aba := NewBinaryAgreement(a.Endpoint().Sub("aba:%d", i), a.f, a.makeCC, a.Log())
+			makeCC := func(endpoint *Endpoint, sid string) *CommonCoinBLSSig {
+				return a.makeCC(endpoint, fmt.Sprintf("%s:%d", sid, i))
+			}
+			aba := NewBinaryAgreement(a.Endpoint().Sub("aba:%d", i), a.f, makeCC, a.Log())
 			aba.Run(input)
 			a.Context().Wg.Go(func() {
-				_ = WaitOutput(a.Context(), aba)
+				WaitOutputReady(a.Context(), aba)
 				abaDone <- i
 			})
 			abas[i] = aba
@@ -115,7 +119,7 @@ func (a *ACS) Run(vi []byte) {
 			case j := <-rbcDone:
 				// >   • upon delivery of v_j from RBC_j, if input has not yet been
 				// >     provided to BA_j, then provide input 1 to BA_j.
-				a.Log().Info("RBC done", "i", j)
+				a.Log().Info("RBC done", "i", j, "output", rbcs[j].Output().MustGet())
 				if abas[j] == nil {
 					startABA(j, true)
 				}
@@ -126,7 +130,7 @@ func (a *ACS) Run(vi []byte) {
 				// >     provided input.
 				abaOut := abas[i].Output().MustGet()
 				abaResults[i] = abaOut
-				a.Log().Info("ABA done", "aba_done", len(abaResults))
+				a.Log().Info("ABA done", "aba_done", len(abaResults), "output", abaOut)
 				if lo.Count(lo.Values(abaResults), true) == a.Endpoint().N()-a.f {
 					for i, aba := range abas {
 						if aba == nil {

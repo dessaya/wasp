@@ -83,7 +83,9 @@ func (cc *CommonCoinBLSSig) Run() {
 		}
 
 		for {
-			msg := cc.Endpoint().Receive()
+			msg := cc.Endpoint().Receive(func() {
+				cc.Log().Info("status", "output", cc.Output().String())
+			})
 			switch payload := msg.Payload.(type) {
 			case *msgCCSigShare:
 				if _, exists := sigShares[msg.Sender]; exists {
@@ -91,7 +93,7 @@ func (cc *CommonCoinBLSSig) Run() {
 					continue
 				}
 				sigShares[msg.Sender] = payload.s
-				if len(sigShares) >= cc.t {
+				if !cc.Output().IsReady() && len(sigShares) >= cc.t {
 					mainSig, err := tbls.Recover(cc.suite, cc.pubPoly, cc.sid, lo.Values(sigShares), cc.t, cc.Endpoint().N())
 					if err != nil {
 						cc.Log().Warn("CommonCoinBLSSig: signature recovery failed", "error", err)

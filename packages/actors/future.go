@@ -2,6 +2,7 @@ package actors
 
 import (
 	"context"
+	"fmt"
 )
 
 // Future represents a value that will be available some time in the future.
@@ -74,4 +75,11 @@ func (f *Future[T]) ValueChan(ctx *Context) <-chan T {
 // ReadyChan returns a channel that will be closed when the future is ready.
 func (f *Future[T]) ReadyChan() <-chan struct{} {
 	return f.ready
+}
+
+func (f *Future[T]) String() string {
+	if f.IsReady() {
+		return fmt.Sprintf("Future(%v)", f.value)
+	}
+	return "Future(<not ready>)"
 }

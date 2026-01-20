@@ -81,14 +81,14 @@ func testABA(t *testing.T, n, f int, silent int, input func() bool, expected *bo
 		endpoint := routers[nodeID].GetEndpoint(abaPath)
 		if i < active {
 			// fair node
-			makeCC := func(round int, endpoint *actors.Endpoint) *actors.CommonCoinBLSSig {
+			makeCC := func(endpoint *actors.Endpoint, sid string) *actors.CommonCoinBLSSig {
 				return actors.NewCommonCoinBLSSig(
 					endpoint,
 					threshold,
 					suite,
 					pubPoly,
 					priShares[i],
-					[]byte{1, 2, 3, byte(round)},
+					[]byte(sid),
 					slog.Default(),
 				)
 			}

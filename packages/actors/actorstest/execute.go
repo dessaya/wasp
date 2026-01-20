@@ -1,16 +1,14 @@
 package actorstest
 
 import (
-	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
+	"runtime/debug"
 	"testing"
+	"time"
 
 	"fortio.org/safecast"
 	"go.uber.org/goleak"
-
-	"github.com/stretchr/testify/require"
 
 	"github.com/iotaledger/wasp/v2/packages/actors"
 )
@@ -26,7 +24,9 @@ func MakeNodeIDFromIndex(index int) actors.NodeID {
 }
 
 func MakeRouters(t *testing.T, n int) (*actors.Context, func(), []actors.NodeID, map[actors.NodeID]*actors.Router) {
-	ctx := actors.NewContext(t.Context())
+	ctx := actors.NewContext(t.Context(), func(r any) {
+		t.Errorf("goroutine panicked: %v\n%s", r, debug.Stack())
+	})
 
 	var peers []actors.NodeID
 	for i := range n {
@@ -41,13 +41,7 @@ func MakeRouters(t *testing.T, n int) (*actors.Context, func(), []actors.NodeID,
 
 	stop := func() {
 		ctx.Cancel()
-		r := ctx.Wg.WaitAndRecover()
-		if r != nil {
-			err := r.AsError()
-			if !errors.Is(err, context.Canceled) {
-				require.NoError(t, err)
-			}
-		}
+		ctx.Wg.Wait()
 		goleak.VerifyNone(t)
 	}
 
@@ -64,30 +58,32 @@ func (m *messageInTransit) String() string {
 	return fmt.Sprintf("%s -> %s [path=%q] %v", m.msg.Sender.ShortString(), m.recipient.ShortString(), m.path, m.msg.Payload)
 }
 
-type Stats struct {
-	Delivered int
-}
-
 // Execute delivers messages between actors until all Endpoints are closed or the test context is done
-func Execute(t *testing.T, ctx *actors.Context, routers map[actors.NodeID]*actors.Router) Stats {
-	var stats Stats
+func Execute(t *testing.T, ctx *actors.Context, routers map[actors.NodeID]*actors.Router) {
+	delivered := 0
 	bus := combine(ctx, routers)
+
 	for {
 		select {
 		case <-ctx.Done():
-			return stats
+			t.Logf("Execute done (context canceled) -- delivered %d messages", delivered)
+			return
 		case msg := <-bus:
 			router, nodeExists := routers[msg.recipient]
 			if !nodeExists {
 				t.Logf("dropping message to non-existing node %s: %s", msg.recipient, msg)
 				continue
 			}
-			t.Logf("delivering %s", msg)
+			// t.Logf("delivering %s", msg)
 			select {
 			case router.GetEndpoint(msg.path).In() <- msg.msg:
-				stats.Delivered++
-			case <-ctx.Done():
-				return stats
+			default:
+				t.Logf("dropping message to %s [%s]: channel full [%s]", msg.recipient.ShortString(), msg.path, msg)
+			}
+			delivered++
+		case <-time.After(1 * time.Second):
+			for _, r := range routers {
+				r.LogStatus()
 			}
 		}
 	}
@@ -112,10 +108,32 @@ func combine(ctx *actors.Context, routers map[actors.NodeID]*actors.Router) chan
 						msg:       actors.NewMessageIn(sender, msg.Payload),
 					}:
 					}
-
 				}
 			}
 		})
 	}
 	return bus
+}
+
+func TrackActors[T any, ActorT actors.Actor[T]](ctx *actors.Context, nodes map[actors.NodeID]ActorT) <-chan actors.NodeID {
+	done := make(chan actors.NodeID)
+	for nodeID, node := range nodes {
+		ctx.Wg.Go(func() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-node.Output().ReadyChan():
+				done <- nodeID
+			}
+		})
+	}
+	return done
+}
+
+func ExecuteAndTrack[T any, ActorT actors.Actor[T]](t *testing.T, ctx *actors.Context, routers map[actors.NodeID]*actors.Router, nodes map[actors.NodeID]ActorT) <-chan actors.NodeID {
+	done := TrackActors(ctx, nodes)
+	ctx.Wg.Go(func() {
+		Execute(t, ctx, routers)
+	})
+	return done
 }

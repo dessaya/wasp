@@ -3,7 +3,6 @@ package actors_test
 import (
 	"fmt"
 	"log/slog"
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -50,7 +49,6 @@ func testACSCase(t *testing.T, n, f, silent int) {
 	// BLSSig setup for the common coin instances.
 	suite := tcrypto.DefaultBLSSuite()
 	_, pubPoly, priShares := testpeers.MakeSharedSecret(suite, n, ccThreshold)
-	sidBase := []byte("ACS") // base session ID for CC
 
 	active := n - silent
 
@@ -59,16 +57,15 @@ func testACSCase(t *testing.T, n, f, silent int) {
 		endpoint := routers[nodeID].GetEndpoint(path)
 		if i < active {
 			// Honest node with ACS.
-			makeCC := func(round int, endpoint *actors.Endpoint) *actors.CommonCoinBLSSig {
+			makeCC := func(endpoint *actors.Endpoint, sid string) *actors.CommonCoinBLSSig {
 				// Derive a per-round session ID to avoid cross-round interference.
-				sid := slices.Concat(sidBase, nodeID[:], []byte{byte(round)})
 				return actors.NewCommonCoinBLSSig(
 					endpoint,
 					ccThreshold,
 					suite,
 					pubPoly,
 					priShares[i],
-					sid,
+					[]byte(sid),
 					slog.Default(),
 				)
 			}

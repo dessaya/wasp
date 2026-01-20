@@ -41,6 +41,8 @@ type Endpoint struct {
 	// out is the channel for outgoing messages from the actor. Sent messages
 	// are always to an actor with the same Path.
 	out chan MessageOut
+	// status is an out-of-band channel for requesting a node to log its current status
+	status chan struct{}
 }
 
 func NewEndpoint(router *Router, path Path) *Endpoint {
@@ -50,6 +52,7 @@ func NewEndpoint(router *Router, path Path) *Endpoint {
 		Path:   path,
 		in:     make(chan MessageIn, bufSize),
 		out:    make(chan MessageOut, bufSize),
+		status: make(chan struct{}),
 	}
 }
 
@@ -75,17 +78,35 @@ func (e *Endpoint) Out() <-chan MessageOut {
 	return e.out
 }
 
-// Receive receives a message for the actor, blocking until a message is available or the context is done.
-func (e *Endpoint) Receive() MessageIn {
-	ctx := e.Context()
+// Status returns the channel for requesting the node to log its current status.
+func (e *Endpoint) Status() <-chan struct{} {
+	return e.status
+}
+
+func (e *Endpoint) LogStatus() {
 	select {
-	case <-ctx.Done():
-		panic(ctx.Err())
-	case msg, ok := <-e.in:
-		if !ok {
-			panic(context.Canceled)
+	case e.status <- struct{}{}:
+	default:
+	}
+}
+
+// Receive receives a message for the actor, blocking until a message is available or the context is done.
+func (e *Endpoint) Receive(onStatus func()) MessageIn {
+	ctx := e.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			panic(ctx.Err())
+		case <-e.status:
+			if onStatus != nil {
+				onStatus()
+			}
+		case msg, ok := <-e.in:
+			if !ok {
+				panic(context.Canceled)
+			}
+			return msg
 		}
-		return msg
 	}
 }
 

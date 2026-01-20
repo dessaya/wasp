@@ -127,7 +127,10 @@ func (r *ReliableBroadcast) receive() {
 	}
 
 	for {
-		msg := r.Endpoint().Receive()
+		msg := r.Endpoint().Receive(func() {
+			r.Log().Info("status", "output", r.Output().String(), "readySent", readySent, "echoCounters", len(echoCounters), "readyCounters", len(readyCounters))
+		})
+
 		switch payload := msg.Payload.(type) {
 		//	06: upon receiving ⟨PROPOSE, 𝑀⟩ from the broadcaster do
 		//	07:     if 𝑃(𝑀) then // (ignoring predicate in this implementation)
