@@ -8,13 +8,13 @@ import (
 
 // Silent is an actor that drops all incoming messages and never produces any output.
 type Silent struct {
-	actors.Actor[struct{}]
+	actors.Actor
 	endpoint *actors.Endpoint
 }
 
 func NewSilent(endpoint *actors.Endpoint) *Silent {
 	return &Silent{
-		Actor:    actors.NewActor[struct{}](endpoint, slog.Default()),
+		Actor:    actors.NewActor(endpoint, slog.Default()),
 		endpoint: endpoint,
 	}
 }

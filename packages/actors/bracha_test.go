@@ -43,7 +43,7 @@ func testBracha(t *testing.T, n, f, s int) {
 	ctx, stop, peers, routers := actorstest.MakeRouters(t, n)
 	defer stop()
 
-	rbcs := map[actors.NodeID]*actors.ReliableBroadcast{}
+	outputs := map[actors.NodeID]*actors.Output[[]byte]{}
 	broadcaster := peers[0]
 
 	m := []byte("hello")
@@ -53,7 +53,7 @@ func testBracha(t *testing.T, n, f, s int) {
 		if i < n-s {
 			// fair node
 			rbc := actors.NewReliableBroadcast(endpoint, f, broadcaster, slog.Default())
-			rbcs[nodeID] = rbc
+			outputs[nodeID] = rbc.Output
 			if i == 0 {
 				// broadcaster broadcasts "hello"
 				rbc.Broadcast(m)
@@ -67,11 +67,12 @@ func testBracha(t *testing.T, n, f, s int) {
 		}
 	}
 
-	done := actorstest.ExecuteAndTrack(t, ctx, routers, rbcs)
+	actorstest.Start(t, ctx, routers)
 
 	// check that all nodes received the correct message
+	done := actors.OutputsReadyChan(ctx, outputs)
 	for range n - s {
 		nodeID := <-done
-		require.Equal(t, m, rbcs[nodeID].Output().MustGet())
+		require.Equal(t, m, outputs[nodeID].MustGet())
 	}
 }

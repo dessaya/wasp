@@ -4,66 +4,37 @@ import (
 	"log/slog"
 )
 
-type Actor[T any] interface {
+type Actor interface {
 	Endpoint() *Endpoint
-	Output() *Future[T]
-	Log() *slog.Logger
-	SetOutput(value T)
 	Context() *Context
 	Go(func())
+	Log() *slog.Logger
 }
 
-func NewActor[T any](endpoint *Endpoint, log *slog.Logger) *actor[T] {
-	return &actor[T]{
+func NewActor(endpoint *Endpoint, log *slog.Logger) *actor {
+	return &actor{
 		endpoint: endpoint,
-		output:   NewFuture[T](),
 		log:      log.With("actor", endpoint.Path),
 	}
 }
 
-type actor[T any] struct {
+type actor struct {
 	endpoint *Endpoint
-	output   *Future[T]
 	log      *slog.Logger
 }
 
-func (a *actor[T]) Endpoint() *Endpoint {
+func (a *actor) Endpoint() *Endpoint {
 	return a.endpoint
 }
 
-func (a *actor[T]) Output() *Future[T] {
-	return a.output
-}
-
-func (a *actor[T]) Log() *slog.Logger {
+func (a *actor) Log() *slog.Logger {
 	return a.log
 }
 
-func (a *actor[T]) SetOutput(value T) {
-	a.output.Set(value)
-}
-
-func WaitOutputReady[S any](ctx *Context, sub Actor[S]) {
-	select {
-	case <-ctx.Done():
-		panic(ctx.Err())
-	case <-sub.Output().ReadyChan():
-	}
-}
-
-func WaitOutput[S any](ctx *Context, sub Actor[S]) (output S) {
-	select {
-	case <-ctx.Done():
-		panic(ctx.Err())
-	case output = <-sub.Output().ValueChan(ctx):
-		return output
-	}
-}
-
-func (a *actor[T]) Context() *Context {
+func (a *actor) Context() *Context {
 	return a.Endpoint().Context()
 }
 
-func (a *actor[T]) Go(f func()) {
+func (a *actor) Go(f func()) {
 	a.Context().Wg.Go(f)
 }

@@ -52,7 +52,7 @@ func testACSCase(t *testing.T, n, f, silent int) {
 
 	active := n - silent
 
-	nodes := make(map[actors.NodeID]*actors.ACS)
+	outputs := make(map[actors.NodeID]*actors.Output[map[actors.NodeID][]byte])
 	for i, nodeID := range peers {
 		endpoint := routers[nodeID].GetEndpoint(path)
 		if i < active {
@@ -70,7 +70,7 @@ func testACSCase(t *testing.T, n, f, silent int) {
 				)
 			}
 			acs := actors.NewACS(endpoint, f, makeCC, slog.Default().With("nodeID", nodeID.ShortString()))
-			nodes[nodeID] = acs
+			outputs[nodeID] = acs.Output
 			// Each node receives a deterministic, node-specific input:
 			vi := fmt.Appendf(nil, "%v-input", nodeID)
 			acs.Run(vi)
@@ -79,13 +79,14 @@ func testACSCase(t *testing.T, n, f, silent int) {
 		}
 	}
 
-	done := actorstest.ExecuteAndTrack(t, ctx, routers, nodes)
+	actorstest.Start(t, ctx, routers)
 
 	// Collect outputs from active nodes.
+	done := actors.OutputsReadyChan(ctx, outputs)
 	results := make(map[actors.NodeID]map[actors.NodeID][]byte)
 	for range active {
 		nodeID := <-done
-		results[nodeID] = nodes[nodeID].Output().MustGet()
+		results[nodeID] = outputs[nodeID].MustGet()
 	}
 
 	ref := results[peers[0]]

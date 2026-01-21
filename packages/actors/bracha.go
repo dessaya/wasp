@@ -47,7 +47,8 @@ import (
 // In the above 𝑡 is "Given a network of 𝑛 nodes, of which up to 𝑡 could be malicious",
 // thus that's the parameter F in the specification below.
 type ReliableBroadcast struct {
-	Actor[[]byte]
+	Actor
+	Output      *Output[[]byte]
 	f           int
 	broadcaster NodeID
 }
@@ -78,7 +79,8 @@ func NewReliableBroadcast(
 	log *slog.Logger,
 ) *ReliableBroadcast {
 	return &ReliableBroadcast{
-		Actor:       NewActor[[]byte](endpoint, log),
+		Actor:       NewActor(endpoint, log),
+		Output:      NewOutput[[]byte](endpoint.Context()),
 		f:           f,
 		broadcaster: broadcaster,
 	}
@@ -128,7 +130,7 @@ func (r *ReliableBroadcast) receive() {
 
 	for {
 		msg := r.Endpoint().Receive(func() {
-			r.Log().Info("status", "output", r.Output().String(), "readySent", readySent, "echoCounters", len(echoCounters), "readyCounters", len(readyCounters))
+			r.Log().Info("status", "output", r.Output.String(), "readySent", readySent, "echoCounters", len(echoCounters), "readyCounters", len(readyCounters))
 		})
 
 		switch payload := msg.Payload.(type) {
@@ -163,7 +165,7 @@ func (r *ReliableBroadcast) receive() {
 				readyReceived[msg.Sender] = true
 				switch len(readyReceived) {
 				case 2*r.f + 1:
-					r.SetOutput(payload.m)
+					r.Output.Set(payload.m)
 				case r.f + 1:
 					sendReady(payload.m)
 				}

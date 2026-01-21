@@ -26,7 +26,8 @@ import (
 // We con't use the DKShare here, because in some cases this CC will be used while
 // creating the DKShare.
 type CommonCoinBLSSig struct {
-	Actor[bool]
+	Actor
+	Output   *Output[bool]
 	t        int
 	suite    pairing.Suite
 	pubPoly  *share.PubPoly
@@ -54,7 +55,8 @@ func NewCommonCoinBLSSig(
 	log *slog.Logger,
 ) *CommonCoinBLSSig {
 	return &CommonCoinBLSSig{
-		Actor:    NewActor[bool](endpoint, log),
+		Actor:    NewActor(endpoint, log),
+		Output:   NewOutput[bool](endpoint.Context()),
 		suite:    suite,
 		pubPoly:  pubPoly,
 		priShare: priShare,
@@ -75,7 +77,7 @@ func (cc *CommonCoinBLSSig) Run() {
 			if cc.Endpoint().N() == 1 {
 				// Only one node; decide immediately.
 				coin := makeCoin(sigShare)
-				cc.SetOutput(coin)
+				cc.Output.Set(coin)
 				return
 			}
 			cc.Endpoint().SendToAllButMe(&msgCCSigShare{s: sigShare})
@@ -84,7 +86,7 @@ func (cc *CommonCoinBLSSig) Run() {
 
 		for {
 			msg := cc.Endpoint().Receive(func() {
-				cc.Log().Info("status", "output", cc.Output().String())
+				cc.Log().Info("status", "output", cc.Output.String())
 			})
 			switch payload := msg.Payload.(type) {
 			case *msgCCSigShare:
@@ -93,7 +95,7 @@ func (cc *CommonCoinBLSSig) Run() {
 					continue
 				}
 				sigShares[msg.Sender] = payload.s
-				if !cc.Output().IsReady() && len(sigShares) >= cc.t {
+				if !cc.Output.IsReady() && len(sigShares) >= cc.t {
 					mainSig, err := tbls.Recover(cc.suite, cc.pubPoly, cc.sid, lo.Values(sigShares), cc.t, cc.Endpoint().N())
 					if err != nil {
 						cc.Log().Warn("CommonCoinBLSSig: signature recovery failed", "error", err)
@@ -104,7 +106,7 @@ func (cc *CommonCoinBLSSig) Run() {
 						continue
 					}
 					// Decided!
-					cc.SetOutput(makeCoin(mainSig))
+					cc.Output.Set(makeCoin(mainSig))
 					return
 				}
 			default:

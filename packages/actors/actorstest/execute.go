@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"runtime/debug"
 	"testing"
-	"time"
 
 	"fortio.org/safecast"
 	"go.uber.org/goleak"
@@ -58,8 +57,12 @@ func (m *messageInTransit) String() string {
 	return fmt.Sprintf("%s -> %s [path=%q] %v", m.msg.Sender.ShortString(), m.recipient.ShortString(), m.path, m.msg.Payload)
 }
 
-// Execute delivers messages between actors until all Endpoints are closed or the test context is done
-func Execute(t *testing.T, ctx *actors.Context, routers map[actors.NodeID]*actors.Router) {
+func Start(t *testing.T, ctx *actors.Context, routers map[actors.NodeID]*actors.Router) {
+	ctx.Wg.Go(func() { execute(t, ctx, routers) })
+}
+
+// execute delivers messages between actors until all Endpoints are closed or the test context is done
+func execute(t *testing.T, ctx *actors.Context, routers map[actors.NodeID]*actors.Router) {
 	delivered := 0
 	bus := combine(ctx, routers)
 
@@ -81,10 +84,10 @@ func Execute(t *testing.T, ctx *actors.Context, routers map[actors.NodeID]*actor
 				t.Logf("dropping message to %s [%s]: channel full [%s]", msg.recipient.ShortString(), msg.path, msg)
 			}
 			delivered++
-		case <-time.After(1 * time.Second):
-			for _, r := range routers {
-				r.LogStatus()
-			}
+			// case <-time.After(1 * time.Second):
+			// 	for _, r := range routers {
+			// 		r.LogStatus()
+			// 	}
 		}
 	}
 }
@@ -113,27 +116,4 @@ func combine(ctx *actors.Context, routers map[actors.NodeID]*actors.Router) chan
 		})
 	}
 	return bus
-}
-
-func TrackActors[T any, ActorT actors.Actor[T]](ctx *actors.Context, nodes map[actors.NodeID]ActorT) <-chan actors.NodeID {
-	done := make(chan actors.NodeID)
-	for nodeID, node := range nodes {
-		ctx.Wg.Go(func() {
-			select {
-			case <-ctx.Done():
-				return
-			case <-node.Output().ReadyChan():
-				done <- nodeID
-			}
-		})
-	}
-	return done
-}
-
-func ExecuteAndTrack[T any, ActorT actors.Actor[T]](t *testing.T, ctx *actors.Context, routers map[actors.NodeID]*actors.Router, nodes map[actors.NodeID]ActorT) <-chan actors.NodeID {
-	done := TrackActors(ctx, nodes)
-	ctx.Wg.Go(func() {
-		Execute(t, ctx, routers)
-	})
-	return done
 }

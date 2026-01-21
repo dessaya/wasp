@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 )
 
+// The code in this file is adapted from github.com/sourcegraph/conc
+
 // NewWaitGroup creates a new WaitGroup.
 func NewWaitGroup(onRecover func(any)) *WaitGroup {
 	return &WaitGroup{onRecover: onRecover}

@@ -76,7 +76,7 @@ func testABA(t *testing.T, n, f int, silent int, input func() bool, expected *bo
 	// Common coin path will be abaPath.Sub("cc%d", r) per round
 
 	// Prepare ABA actors and start them.
-	abas := make(map[actors.NodeID]*actors.BinaryAgreement)
+	abaOutputs := make(map[actors.NodeID]*actors.Output[bool])
 	for i, nodeID := range peers {
 		endpoint := routers[nodeID].GetEndpoint(abaPath)
 		if i < active {
@@ -99,21 +99,22 @@ func testABA(t *testing.T, n, f int, silent int, input func() bool, expected *bo
 				slog.Default(),
 			)
 			aba.Run(input())
-			abas[nodeID] = aba
+			abaOutputs[nodeID] = aba.Output
 		} else {
 			// silent node
 			actorstest.NewSilent(endpoint).Run()
 		}
 	}
 
-	done := actorstest.ExecuteAndTrack(t, ctx, routers, abas)
+	actorstest.Start(t, ctx, routers)
 
 	// Collect outputs from all active nodes.
+	done := actors.OutputsReadyChan(ctx, abaOutputs)
 	results := make(map[actors.NodeID]bool, active)
 	var refVal bool
 	for range active {
 		nodeID := <-done
-		results[nodeID] = abas[nodeID].Output().MustGet()
+		results[nodeID] = abaOutputs[nodeID].MustGet()
 		refVal = results[nodeID]
 	}
 	if expected != nil {

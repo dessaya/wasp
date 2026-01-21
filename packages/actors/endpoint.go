@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/samber/lo"
 )
 
 // NodeID is the unique identifier of a node in the network.
@@ -66,6 +67,14 @@ func (e *Endpoint) N() int {
 
 func (e *Endpoint) Me() NodeID {
 	return e.Router.Me
+}
+
+func (e *Endpoint) MyIndex() int {
+	i := lo.IndexOf(e.Router.Peers, e.Router.Me)
+	if i == -1 {
+		panic("nodeID not found in peers list")
+	}
+	return i
 }
 
 // In is to be used for delivering messages to the node
@@ -137,6 +146,6 @@ func (e *Endpoint) SendToAllButMe(m MessagePayload) {
 	}
 }
 
-func (e *Endpoint) Sub(subpath string, args ...any) *Endpoint {
-	return e.Router.GetEndpoint(e.Path.Sub(subpath, args...))
+func (e *Endpoint) Sub(format string, args ...any) *Endpoint {
+	return e.Router.GetEndpoint(e.Path.Sub(format, args...))
 }

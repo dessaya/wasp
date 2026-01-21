@@ -92,12 +92,12 @@ import (
 // scheme allowing to keep the private keys secret. The scheme implementation is taken
 // from the PoC mentioned above. It is described in <https://hackmd.io/@CcRtfCBnRbW82-AdbFJUig/S1qcPiUN5>.
 type ACSS struct {
-	Actor[*ACSSOutput]
+	Actor
+	Output  *Output[*ACSSOutput]
 	f       int
 	suite   suites.Suite
 	peerPKs map[NodeID]kyber.Point
 	mySK    kyber.Scalar
-	myIndex int
 }
 
 type ACSSOutput struct {
@@ -149,20 +149,18 @@ func NewACSS(
 	mySK kyber.Scalar,
 	log *slog.Logger,
 ) *ACSS {
-	// Determine index order from peers list.
-	myIndex := lo.IndexOf(endpoint.Router.Peers, endpoint.Me())
-	if myIndex < 0 {
-		panic("ACSS: my nodeID not found in peers list")
-	}
-
 	return &ACSS{
-		Actor:   NewActor[*ACSSOutput](endpoint, log),
+		Actor:   NewActor(endpoint, log),
+		Output:  NewOutput[*ACSSOutput](endpoint.Context()),
 		f:       f,
 		suite:   suite,
 		peerPKs: peerPKs,
 		mySK:    mySK,
-		myIndex: myIndex,
 	}
+}
+
+func (a *ACSS) MakeDealAndShare(secret kyber.Scalar) {
+	a.ShareDeal(a.MakeDealFromSecret(secret))
 }
 
 // MakeDealFromSecret creates a new Deal that can be shared with ShareDeal.
@@ -186,8 +184,8 @@ func (a *ACSS) ShareDeal(deal *crypto.Deal) {
 		if a.Endpoint().N() == 1 {
 			// shortcut for n=1
 			secret := crypto.Secret(a.suite, deal.PubKey, a.mySK)
-			priShare := lo.Must(crypto.DecryptShare(a.suite, deal, a.myIndex, secret))
-			a.SetOutput(&ACSSOutput{
+			priShare := lo.Must(crypto.DecryptShare(a.suite, deal, a.Endpoint().MyIndex(), secret))
+			a.Output.Set(&ACSSOutput{
 				PriShare: priShare,
 				Commits:  deal.Commits,
 			})
@@ -220,7 +218,7 @@ func (a *ACSS) Receive(dealer NodeID) {
 func (a *ACSS) runRBC(dealer NodeID, f func(rbc *ReliableBroadcast)) []byte {
 	rbc := NewReliableBroadcast(a.Endpoint().Sub("rbc"), a.f, dealer, a.Log())
 	f(rbc)
-	return WaitOutput(a.Context(), rbc)
+	return rbc.Output.Wait()
 }
 
 func (a *ACSS) mainLoop(rbcOut []byte) {
@@ -258,7 +256,7 @@ func (a *ACSS) mainLoop(rbcOut []byte) {
 	// > else:
 	// >   send <OK>
 	secret := crypto.Secret(a.suite, deal.PubKey, a.mySK)
-	myShare, err := crypto.DecryptShare(a.suite, deal, a.myIndex, secret)
+	myShare, err := crypto.DecryptShare(a.suite, deal, a.Endpoint().MyIndex(), secret)
 	if err != nil {
 		broadcastImplicate(deal.PubKey, err)
 	} else {
@@ -272,7 +270,7 @@ func (a *ACSS) mainLoop(rbcOut []byte) {
 
 	for {
 		msg := a.Endpoint().Receive(func() {
-			a.Log().Info("status", "output", a.Output().String(), "okReceived", len(okReceived), "readyReceived", len(readyReceived), "implicateReceived", len(implicateReceived), "recoverReceived", len(recoverReceived))
+			a.Log().Info("status", "output", a.Output.String(), "okReceived", len(okReceived), "readyReceived", len(readyReceived), "implicateReceived", len(implicateReceived), "recoverReceived", len(recoverReceived))
 		})
 
 		switch m := msg.Payload.(type) {
@@ -298,8 +296,8 @@ func (a *ACSS) mainLoop(rbcOut []byte) {
 				// >   if sᵢ is valid:
 				// >     out = true
 				// >     output sᵢ
-				if !a.Output().IsReady() && len(readyReceived) >= a.Endpoint().N()-a.f && myShare != nil {
-					a.SetOutput(&ACSSOutput{
+				if !a.Output.IsReady() && len(readyReceived) >= a.Endpoint().N()-a.f && myShare != nil {
+					a.Output.Set(&ACSSOutput{
 						PriShare: myShare,
 						Commits:  deal.Commits,
 					})
@@ -335,7 +333,7 @@ func (a *ACSS) mainLoop(rbcOut []byte) {
 			}
 
 		case *msgACSSRecover:
-			if a.Output().IsReady() {
+			if a.Output.IsReady() {
 				// Ignore the RECOVER messages, if we are done with the output.
 				continue
 			}
@@ -362,12 +360,12 @@ func (a *ACSS) mainLoop(rbcOut []byte) {
 				// >       output sᵢ
 				if len(recoverReceived) >= a.f+1 {
 					priShares := lo.Values(recoverReceived)
-					myShare, err := crypto.InterpolateShare(a.suite, priShares, a.Endpoint().N(), a.myIndex)
+					myShare, err := crypto.InterpolateShare(a.suite, priShares, a.Endpoint().N(), a.Endpoint().MyIndex())
 					if err != nil {
 						a.Log().Warn("Failed to recover pri-poly: %s", "error", err.Error())
 						continue
 					}
-					a.SetOutput(&ACSSOutput{
+					a.Output.Set(&ACSSOutput{
 						PriShare: myShare,
 						Commits:  deal.Commits,
 					})

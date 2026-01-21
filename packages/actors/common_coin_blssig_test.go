@@ -47,14 +47,14 @@ func testCommonCoinCase(t *testing.T, n, threshold, silent int) {
 	_, pubPoly, priShares := testpeers.MakeSharedSecret(suite, n, threshold)
 	sid := []byte{0xA, 0xB, 0xC, 0xD} // session identifier for signing
 	active := n - silent
-	nodes := make(map[actors.NodeID]*actors.CommonCoinBLSSig, active)
+	outputs := make(map[actors.NodeID]*actors.Output[bool])
 
 	for i, nodeID := range peers {
 		endpoint := routers[nodeID].GetEndpoint(path)
 		if i < active {
 			// fair node
 			node := actors.NewCommonCoinBLSSig(endpoint, threshold, suite, pubPoly, priShares[i], sid, slog.Default())
-			nodes[nodeID] = node
+			outputs[nodeID] = node.Output
 			node.Run()
 		} else {
 			// silent node
@@ -62,12 +62,13 @@ func testCommonCoinCase(t *testing.T, n, threshold, silent int) {
 		}
 	}
 
-	done := actorstest.ExecuteAndTrack(t, ctx, routers, nodes)
+	actorstest.Start(t, ctx, routers)
 
+	done := actors.OutputsReadyChan(ctx, outputs)
 	var coins []bool
 	for range active {
 		nodeID := <-done
-		coins = append(coins, nodes[nodeID].Output().MustGet())
+		coins = append(coins, outputs[nodeID].MustGet())
 	}
 	firstCoin := coins[0]
 	for i, coin := range coins {

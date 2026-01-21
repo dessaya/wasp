@@ -73,34 +73,35 @@ func runACSSTest(t *testing.T, n, f int, silent int, faultyDeals int) {
 
 	dealer := peers[rand.Intn(validRange)]
 
-	nodes := make(map[actors.NodeID]*actors.ACSS)
+	outputs := make(map[actors.NodeID]*actors.Output[*actors.ACSSOutput])
 	for i, nid := range peers {
 		endpoint := routers[nid].GetEndpoint(actors.Path("acss"))
 		if isValidNode(i) {
-			acssActor := actors.NewACSS(endpoint, f, suite, pubKeys, sks[nid], slog.Default().With("nodeID", nid.ShortString()))
+			acss := actors.NewACSS(endpoint, f, suite, pubKeys, sks[nid], slog.Default().With("nodeID", nid.ShortString()))
 			if nid == dealer {
-				deal := acssActor.MakeDealFromSecret(secret)
+				deal := acss.MakeDealFromSecret(secret)
 				for range faultyDeals {
 					// corrupt deal
 					deal.Shares[i][0]++
 				}
-				acssActor.ShareDeal(deal)
+				acss.ShareDeal(deal)
 			} else {
-				acssActor.Receive(dealer)
+				acss.Receive(dealer)
 			}
-			nodes[nid] = acssActor
+			outputs[nid] = acss.Output
 		} else {
 			// silent nodes do nothing
 			actorstest.NewSilent(endpoint).Run()
 		}
 	}
 
-	done := actorstest.ExecuteAndTrack(t, ctx, routers, nodes)
+	actorstest.Start(t, ctx, routers)
 
+	done := actors.OutputsReadyChan(ctx, outputs)
 	var priShares []*share.PriShare
 	for range validRange {
 		nodeID := <-done
-		o := nodes[nodeID].Output().MustGet()
+		o := outputs[nodeID].MustGet()
 		require.NotNil(t, o)
 		require.NotNil(t, o.PriShare)
 		require.NotNil(t, o.Commits)
