@@ -57,7 +57,7 @@ func runACSSTest(t *testing.T, n, f int, silent int, faultyDeals int) {
 	suite := tcrypto.DefaultEd25519Suite()
 	secret := suite.Scalar().Pick(suite.RandomStream())
 
-	ctx, stop, peers, routers := actorstest.MakeRouters(t, n)
+	ctx, stop, peers, routers := actorstest.MakeRouters(t, n, true)
 	defer stop()
 
 	pubKeys := make(map[actors.NodeID]kyber.Point)

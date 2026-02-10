@@ -35,7 +35,7 @@ func TestNonceDKG(t *testing.T) {
 }
 
 func testNonceDKG(t *testing.T, n int, f int) {
-	ctx, stop, peers, routers := actorstest.MakeRouters(t, n)
+	ctx, stop, peers, routers := actorstest.MakeRouters(t, n, true)
 	defer stop()
 
 	suite := tcrypto.DefaultEd25519Suite()

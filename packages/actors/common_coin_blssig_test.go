@@ -39,7 +39,7 @@ func TestCommonCoinBLSSig(t *testing.T) {
 }
 
 func testCommonCoinCase(t *testing.T, n, threshold, silent int) {
-	ctx, stop, peers, routers := actorstest.MakeRouters(t, n)
+	ctx, stop, peers, routers := actorstest.MakeRouters(t, n, true)
 	defer stop()
 
 	const path = "cc"

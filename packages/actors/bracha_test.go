@@ -40,7 +40,7 @@ func testBracha(t *testing.T, n, f, s int) {
 		t.Fatalf("number of silent nodes s=%d cannot be greater than f=%d", s, f)
 	}
 	const path = "bracha"
-	ctx, stop, peers, routers := actorstest.MakeRouters(t, n)
+	ctx, stop, peers, routers := actorstest.MakeRouters(t, n, true)
 	defer stop()
 
 	outputs := map[actors.NodeID]*actors.Output[[]byte]{}

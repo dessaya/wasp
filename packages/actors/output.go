@@ -97,7 +97,6 @@ func (o *Output[T]) ValueChan() <-chan T {
 	ch := make(chan T, 1)
 	o.OnValueReady(func(v T) {
 		ch <- v
-		close(ch)
 	})
 	return ch
 }
@@ -115,7 +114,7 @@ func (o *Output[T]) String() string {
 }
 
 func OutputsReadyChan[K comparable, T any](ctx *Context, outputs map[K]*Output[T]) chan K {
-	ch := make(chan K)
+	ch := make(chan K, len(outputs))
 	for k, out := range outputs {
 		out.OnReady(func() {
 			ch <- k

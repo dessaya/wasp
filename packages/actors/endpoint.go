@@ -77,13 +77,13 @@ func (e *Endpoint) MyIndex() int {
 	return i
 }
 
-// In is to be used for delivering messages to the node
-func (e *Endpoint) In() chan<- MessageIn {
+// In is the channel where the actor receives incoming messages. Received messages are always from an actor with the same Path.
+func (e *Endpoint) In() chan MessageIn {
 	return e.in
 }
 
-// Out is to be used for collecting outgoing messages from the node
-func (e *Endpoint) Out() <-chan MessageOut {
+// Out is the channel where the actor sends outgoing messages. Sent messages are always to an actor with the same Path.
+func (e *Endpoint) Out() chan MessageOut {
 	return e.out
 }
 

@@ -22,7 +22,7 @@ func MakeNodeIDFromIndex(index int) actors.NodeID {
 	return nodeID
 }
 
-func MakeRouters(t *testing.T, n int) (*actors.Context, func(), []actors.NodeID, map[actors.NodeID]*actors.Router) {
+func MakeRouters(t *testing.T, n int, verifyGoroutineLeaks bool) (*actors.Context, func(), []actors.NodeID, map[actors.NodeID]*actors.Router) {
 	ctx := actors.NewContext(t.Context(), func(r any) {
 		t.Errorf("goroutine panicked: %v\n%s", r, debug.Stack())
 	})
@@ -41,7 +41,9 @@ func MakeRouters(t *testing.T, n int) (*actors.Context, func(), []actors.NodeID,
 	stop := func() {
 		ctx.Cancel()
 		ctx.Wg.Wait()
-		goleak.VerifyNone(t)
+		if verifyGoroutineLeaks {
+			goleak.VerifyNone(t)
+		}
 	}
 
 	return ctx, stop, peers, routers

@@ -41,7 +41,7 @@ func testACSCase(t *testing.T, n, f, silent int) {
 	ccThreshold := f + 1
 
 	// Set up routers / endpoints.
-	ctx, stop, peers, routers := actorstest.MakeRouters(t, n)
+	ctx, stop, peers, routers := actorstest.MakeRouters(t, n, true)
 	defer stop()
 
 	const path = "acs"

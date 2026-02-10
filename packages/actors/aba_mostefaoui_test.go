@@ -65,7 +65,7 @@ func testABA(t *testing.T, n, f int, silent int, input func() bool, expected *bo
 	threshold := f + 1
 	active := n - silent
 
-	ctx, stop, peers, routers := actorstest.MakeRouters(t, n)
+	ctx, stop, peers, routers := actorstest.MakeRouters(t, n, true)
 	defer stop()
 
 	suite := tcrypto.DefaultBLSSuite()
