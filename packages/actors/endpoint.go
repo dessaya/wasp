@@ -7,6 +7,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/samber/lo"
+
+	"github.com/iotaledger/wasp/v2/packages/cryptolib"
 )
 
 // NodeID is the unique identifier of a node in the network.
@@ -18,6 +20,12 @@ func (id NodeID) String() string {
 
 func (id NodeID) ShortString() string {
 	return hexutil.Encode(id[:4])
+}
+
+func NodeIDFromPublicKey(pk *cryptolib.PublicKey) NodeID {
+	var nodeID NodeID
+	copy(nodeID[:], pk.AsBytes())
+	return nodeID
 }
 
 // Path is a unique name for each actor in a node. An actor can only communicate

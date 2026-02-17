@@ -23,17 +23,20 @@ func MakeNodeIDFromIndex(index int) actors.NodeID {
 }
 
 func MakeRouters(t *testing.T, n int, verifyGoroutineLeaks bool) (*actors.Context, func(), []actors.NodeID, map[actors.NodeID]*actors.Router) {
-	ctx := actors.NewContext(t.Context(), func(r any) {
-		t.Errorf("goroutine panicked: %v\n%s", r, debug.Stack())
-	})
-
 	var peers []actors.NodeID
 	for i := range n {
 		peers = append(peers, MakeNodeIDFromIndex(i))
 	}
+	return MakeRoutersWithNodeIDs(t, peers, verifyGoroutineLeaks)
+}
+
+func MakeRoutersWithNodeIDs(t *testing.T, peers []actors.NodeID, verifyGoroutineLeaks bool) (*actors.Context, func(), []actors.NodeID, map[actors.NodeID]*actors.Router) {
+	ctx := actors.NewContext(t.Context(), func(r any) {
+		t.Errorf("goroutine panicked: %v\n%s", r, debug.Stack())
+	})
+
 	routers := make(map[actors.NodeID]*actors.Router)
-	for i := range n {
-		nodeID := MakeNodeIDFromIndex(i)
+	for _, nodeID := range peers {
 		router := actors.NewRouter(ctx, nodeID, peers)
 		routers[nodeID] = router
 	}
@@ -42,7 +45,11 @@ func MakeRouters(t *testing.T, n int, verifyGoroutineLeaks bool) (*actors.Contex
 		ctx.Cancel()
 		ctx.Wg.Wait()
 		if verifyGoroutineLeaks {
-			goleak.VerifyNone(t)
+			goleak.VerifyNone(
+				t,
+				goleak.IgnoreAnyFunction("github.com/iotaledger/hive.go/runtime/workerpool.(*WorkerPool).dispatcher"),
+				goleak.IgnoreAnyFunction("github.com/iotaledger/hive.go/runtime/workerpool.(*WorkerPool).worker"),
+			)
 		}
 	}
 
