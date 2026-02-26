@@ -106,10 +106,9 @@ func NewConsensus(
 	processorCache *processors.Config,
 	instID []byte,
 	validatorAgentID isc.AgentID,
-	log *slog.Logger,
 ) *Consensus {
 	return &Consensus{
-		Actor:            NewActor(endpoint, log),
+		Actor:            NewActor(endpoint),
 		chainID:          chainID,
 		chainStore:       chainStore,
 		mySK:             mySK,
@@ -159,7 +158,6 @@ func (c *Consensus) Start(proposedStateAnchor *isc.StateAnchor) {
 			nodePKs,
 			myKyberKeys.Private,
 			c.dkShare.DSS(),
-			c.Log(),
 		)
 		distSign.Start()
 		distSignProposedIndexesChan := distSign.OutputProposedIndexes.ReadyChan()
@@ -186,6 +184,8 @@ func (c *Consensus) Start(proposedStateAnchor *isc.StateAnchor) {
 		}
 		var signature []byte
 
+		blsSuite := tcrypto.DefaultBLSSuite()
+
 		tryACSInputs := func() {
 			if acs != nil {
 				return
@@ -193,6 +193,7 @@ func (c *Consensus) Start(proposedStateAnchor *isc.StateAnchor) {
 			if requestRefs == nil || !stateMgrProposalConfirmed || l1Info == nil || timeData == nil || distSignIndexProposal == nil {
 				return
 			}
+			c.Log().Info("ACS inputs ready")
 			rotateTo := c.rotateTo
 			if rotateTo != nil && rotateTo.Equals(*c.dkShare.GetAddress().AsIotaAddress()) {
 				// Do not propose to rotate to the existing committee.
@@ -209,25 +210,13 @@ func (c *Consensus) Start(proposedStateAnchor *isc.StateAnchor) {
 				l1Info.gasCoins, // Will be NIL in the case of ⊥ proposal.
 				l1Info.l1Params, // Will be NIL in the case of ⊥ proposal.
 			)
-			makeCC := func(endpoint *Endpoint, sidSuffix string) *CommonCoinBLSSig {
-				nodeID := c.Endpoint().Me()
-				sid := hashing.HashDataBlake2b(c.instID, nodeID[:], []byte(sidSuffix)).Bytes()
-				return NewCommonCoinBLSSig(
-					endpoint,
-					int(c.dkShare.BLSThreshold()),
-					tcrypto.DefaultBLSSuite(),
-					c.dkShare.BLSCommits(),
-					c.dkShare.BLSPriShare(),
-					sid,
-					c.Log(),
-				)
-			}
-			acs = NewACS(
-				c.Endpoint().Sub("acs"),
-				f,
-				makeCC,
-				c.Log(),
-			)
+			acs = NewACS(c.Endpoint().Sub("acs"), f, CommonCoinBLSSigParams{
+				T:        int(c.dkShare.BLSThreshold()),
+				Suite:    blsSuite,
+				PubPoly:  c.dkShare.BLSCommits(),
+				PriShare: c.dkShare.BLSPriShare(),
+				SID:      c.instID,
+			})
 			acs.Run(batchProposal.Bytes())
 			acsOutputReadyChan = acs.Output.ReadyChan()
 		}
@@ -239,6 +228,7 @@ func (c *Consensus) Start(proposedStateAnchor *isc.StateAnchor) {
 			if !c.Outputs.AggregatedBatchProposals.IsReady() || mempoolDecidedRequests == nil || stateMgrDecidedState == nil || randomness == nil {
 				return
 			}
+			c.Log().Info("Preparing VM task")
 			aggregatedProposals := c.Outputs.AggregatedBatchProposals.MustGet()
 			decidedBaseAnchor := aggregatedProposals.DecidedBaseAnchor()
 			stateAnchor := isc.NewStateAnchor(decidedBaseAnchor.Anchor(), decidedBaseAnchor.ISCPackage())
@@ -273,6 +263,7 @@ func (c *Consensus) Start(proposedStateAnchor *isc.StateAnchor) {
 			if blsData == nil || len(blsPartialSigs) < int(c.dkShare.BLSThreshold()) {
 				return
 			}
+			c.Log().Info("Producing randomness")
 			sig, err := c.dkShare.BLSRecoverMasterSignature(lo.Values(blsPartialSigs), blsData)
 			if err != nil {
 				c.Log().Warn(fmt.Sprintf("Cannot reconstruct BLS signature from %v/%v sigShares", len(blsPartialSigs), c.dkShare.GetN()), "err", err)
@@ -290,6 +281,7 @@ func (c *Consensus) Start(proposedStateAnchor *isc.StateAnchor) {
 			if !c.Outputs.AggregatedBatchProposals.IsReady() || unsignedTX == nil {
 				return
 			}
+			c.Log().Info("Providing inputs to distributed signing")
 			indexProposals := c.Outputs.AggregatedBatchProposals.MustGet().DecidedDistributedSignatureIndexProposals()
 			distSign.InputDecided(indexProposals, c.makeTransactionSigningBytes(unsignedTX))
 			distSignInputDone = true
@@ -319,34 +311,63 @@ func (c *Consensus) Start(proposedStateAnchor *isc.StateAnchor) {
 				return
 
 			case <-c.Endpoint().Status():
-				c.Log().Info("status")
+				c.Log().Info("status",
+					"haveRequestRefs", requestRefs != nil,
+					"stateMgrProposalConfirmed", stateMgrProposalConfirmed,
+					"haveL1Info", l1Info != nil,
+					"haveTimeData", timeData != nil,
+					"haveDistSignIndexProposal", distSignIndexProposal != nil,
+					"acsStarted", acs != nil,
+					"acsDone", acs.Output.IsReady(),
+					"haveBLSData", blsData != nil,
+					"haveBLSSigs", len(blsPartialSigs),
+					"haveRandomness", randomness != nil,
+					"haveMempoolDecidedRequests", mempoolDecidedRequests != nil,
+					"haveStateMgrDecidedState", stateMgrDecidedState != nil,
+					"haveUnsignedTX", unsignedTX != nil,
+					"distSignInputDone", distSignInputDone,
+					"haveDecidedAnchor", decidedAnchor != nil,
+					"blockSavedReady", blockSaved.ready,
+					"haveSignature", signature != nil,
+					"outputProposedAnchor", c.Outputs.ProposedAnchor.IsReady(),
+					"outputAggregatedBatchProposals", c.Outputs.AggregatedBatchProposals.IsReady(),
+					"outputVMTask", c.Outputs.VMTask.IsReady(),
+					"outputStateDraft", c.Outputs.StateDraft.IsReady(),
+					"outputResult", c.Outputs.Result.IsReady(),
+				)
 
-			case mp := <-c.inputMempoolProposal:
+			case refs := <-c.inputMempoolProposal:
+				c.Log().Info("Received mempool proposal", "requestRefs", refs)
 				c.inputMempoolProposal = nil
-				requestRefs = mp
+				requestRefs = refs
 				tryACSInputs()
 
 			case <-c.inputStateMgrProposalConfirmed:
+				c.Log().Info("Received state manager proposal confirmation")
 				c.inputStateMgrProposalConfirmed = nil
 				stateMgrProposalConfirmed = true
 				tryACSInputs()
 
 			case l1i := <-c.inputL1Info:
+				c.Log().Info("Received L1 info", "gasCoins", l1i.gasCoins, "l1Params", l1i.l1Params)
 				c.inputL1Info = nil
 				l1Info = &l1i
 				tryACSInputs()
 
 			case t := <-c.inputTimeData:
+				c.Log().Info("Received time data", "time", t)
 				c.inputTimeData = nil
 				timeData = &t
 				tryACSInputs()
 
 			case <-distSignProposedIndexesChan:
+				c.Log().Info("Received distributed signature index proposal")
 				distSignProposedIndexesChan = nil
 				distSignIndexProposal = distSign.OutputProposedIndexes.MustGet()
 				tryACSInputs()
 
 			case <-acsOutputReadyChan:
+				c.Log().Info("Received ACS output")
 				acsOutputReadyChan = nil
 				acsOutput := acs.Output.MustGet()
 				aggr := AggregateBatchProposals(acsOutput, c.Endpoint().Router.Peers, f, c.Log())
@@ -390,20 +411,24 @@ func (c *Consensus) Start(proposedStateAnchor *isc.StateAnchor) {
 					c.Log().Warn("received duplicate BLS partial signature", "from", m.Sender)
 					continue
 				}
+				c.Log().Info("Received BLS partial signature", "from", m.Sender)
 				blsPartialSigs[m.Sender] = payload.partialSig
 				tryProduceRandomness()
 
 			case reqs := <-c.inputMempoolRequests:
+				c.Log().Info("Received mempool decided requests", "requests", reqs)
 				c.inputMempoolRequests = nil
 				mempoolDecidedRequests = reqs
 				tryMakeVMTask()
 
 			case s := <-c.inputStateMgrState:
+				c.Log().Info("Received state manager decided state")
 				c.inputStateMgrState = nil
 				stateMgrDecidedState = s
 				tryMakeVMTask()
 
 			case vmResult := <-c.inputVMResult:
+				c.Log().Info("Received VM result")
 				c.inputVMResult = nil
 				if len(vmResult.RequestResults) == 0 {
 					// No requests were processed, don't have what to do.
@@ -418,11 +443,13 @@ func (c *Consensus) Start(proposedStateAnchor *isc.StateAnchor) {
 				}
 
 			case <-distSignOutputSignatureChan:
+				c.Log().Info("Received distributed signature")
 				distSignOutputSignatureChan = nil
 				signature = distSign.OutputSignature.MustGet()
 				trySignTx()
 
 			case block := <-c.inputStateMgrBlockSaved:
+				c.Log().Info("Received state manager block saved", "blockHash", block.Hash().String())
 				c.inputStateMgrBlockSaved = nil
 				blockSaved.block = block
 				blockSaved.ready = true

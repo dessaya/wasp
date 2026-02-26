@@ -2,7 +2,6 @@ package actors
 
 import (
 	"fmt"
-	"log/slog"
 
 	"github.com/samber/lo"
 	"go.dedis.ch/kyber/v3"
@@ -147,10 +146,9 @@ func NewACSS(
 	suite suites.Suite,
 	peerPKs map[NodeID]kyber.Point,
 	mySK kyber.Scalar,
-	log *slog.Logger,
 ) *ACSS {
 	return &ACSS{
-		Actor:   NewActor(endpoint, log),
+		Actor:   NewActor(endpoint),
 		Output:  NewOutput[*ACSSOutput](endpoint.Context()),
 		f:       f,
 		suite:   suite,
@@ -216,7 +214,7 @@ func (a *ACSS) Receive(dealer NodeID) {
 }
 
 func (a *ACSS) runRBC(dealer NodeID, f func(rbc *ReliableBroadcast)) []byte {
-	rbc := NewReliableBroadcast(a.Endpoint().Sub("rbc"), a.f, dealer, a.Log())
+	rbc := NewReliableBroadcast(a.Endpoint().Sub("rbc"), a.f, dealer)
 	f(rbc)
 	return rbc.Output.Wait()
 }
@@ -270,7 +268,13 @@ func (a *ACSS) mainLoop(rbcOut []byte) {
 
 	for {
 		msg := a.Endpoint().Receive(func() {
-			a.Log().Info("status", "output", a.Output.String(), "okReceived", len(okReceived), "readyReceived", len(readyReceived), "implicateReceived", len(implicateReceived), "recoverReceived", len(recoverReceived))
+			a.Log().Info("status",
+				"output", a.Output.String(),
+				"okReceived", len(okReceived),
+				"readyReceived", len(readyReceived),
+				"implicateReceived", len(implicateReceived),
+				"recoverReceived", len(recoverReceived),
+			)
 		})
 
 		switch m := msg.Payload.(type) {

@@ -11,10 +11,10 @@ type Actor interface {
 	Log() *slog.Logger
 }
 
-func NewActor(endpoint *Endpoint, log *slog.Logger) *actor {
+func NewActor(endpoint *Endpoint) *actor {
 	return &actor{
 		endpoint: endpoint,
-		log:      log.With("actor", endpoint.Path),
+		log:      endpoint.Log(),
 	}
 }
 

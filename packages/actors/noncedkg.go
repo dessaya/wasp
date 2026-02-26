@@ -2,7 +2,6 @@ package actors
 
 import (
 	"fmt"
-	"log/slog"
 	"sort"
 
 	"go.dedis.ch/kyber/v3"
@@ -63,10 +62,9 @@ func NewNonceDKG(
 	suite suites.Suite,
 	peerPKs map[NodeID]kyber.Point,
 	mySK kyber.Scalar,
-	log *slog.Logger,
 ) *NonceDKG {
 	return &NonceDKG{
-		Actor:              NewActor(endpoint, log),
+		Actor:              NewActor(endpoint),
 		IntermediateOutput: NewOutput[[]int](endpoint.Context()),
 		FinalOutput:        NewOutput[*NonceDKGOutput](endpoint.Context()),
 		f:                  f,
@@ -91,7 +89,6 @@ func (n *NonceDKG) Start() {
 				n.suite,
 				n.peerPKs,
 				n.mySK,
-				n.Log(),
 			)
 			acssOutputs[i] = acss.Output
 

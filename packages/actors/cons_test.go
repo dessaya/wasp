@@ -2,7 +2,6 @@ package actors_test
 
 import (
 	"fmt"
-	"log/slog"
 	"math/rand"
 	"testing"
 	"time"
@@ -116,12 +115,11 @@ func testConsBasic(t *testing.T, n int, f int) {
 			procConfig,
 			consInstID,
 			accounts.CommonAccount(),
-			slog.Default(),
 		)
 		nodes[nid].Start(stateAnchor0)
 	}
 
-	actorstest.Start(t, ctx, routers)
+	actorstest.Start(t, ctx, routers, false)
 
 	// Provide SM and MP responses on proposals, and some other needed inputs.
 	for nid := range nodes {

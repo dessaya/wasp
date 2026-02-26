@@ -4,8 +4,8 @@
 package actors
 
 import (
+	"encoding/hex"
 	"fmt"
-	"log/slog"
 
 	"github.com/samber/lo"
 	"go.dedis.ch/kyber/v3/pairing"
@@ -13,6 +13,14 @@ import (
 	"go.dedis.ch/kyber/v3/sign/bdn"
 	"go.dedis.ch/kyber/v3/sign/tbls"
 )
+
+type CommonCoinBLSSigParams struct {
+	T        int
+	Suite    pairing.Suite
+	PubPoly  *share.PubPoly
+	PriShare *share.PriShare
+	SID      []byte
+}
 
 // CommonCoinBLSSig implements a Common Coin (CC) based on a BLS Threshold signatures as
 // described in the Appendix C of
@@ -27,12 +35,8 @@ import (
 // creating the DKShare.
 type CommonCoinBLSSig struct {
 	Actor
-	Output   *Output[bool]
-	t        int
-	suite    pairing.Suite
-	pubPoly  *share.PubPoly
-	priShare *share.PriShare
-	sid      []byte
+	blsParams CommonCoinBLSSigParams
+	Output    *Output[bool]
 }
 
 type msgCCSigShare struct {
@@ -47,21 +51,12 @@ func (m *msgCCSigShare) String() string {
 // NewCommonCoinBLSSig constructs a new common coin actor.
 func NewCommonCoinBLSSig(
 	endpoint *Endpoint,
-	t int,
-	suite pairing.Suite,
-	pubPoly *share.PubPoly,
-	priShare *share.PriShare,
-	sid []byte,
-	log *slog.Logger,
+	blsParams CommonCoinBLSSigParams,
 ) *CommonCoinBLSSig {
 	return &CommonCoinBLSSig{
-		Actor:    NewActor(endpoint, log),
-		Output:   NewOutput[bool](endpoint.Context()),
-		suite:    suite,
-		pubPoly:  pubPoly,
-		priShare: priShare,
-		t:        t,
-		sid:      sid,
+		Actor:     NewActor(endpoint),
+		Output:    NewOutput[bool](endpoint.Context()),
+		blsParams: blsParams,
 	}
 }
 
@@ -69,11 +64,15 @@ func NewCommonCoinBLSSig(
 // context is canceled. It returns the decided coin value.
 func (cc *CommonCoinBLSSig) Run() {
 	cc.Go(func() {
+		// make sure session ID is unique per CC instance
+		sid := append([]byte(cc.Endpoint().Path), cc.blsParams.SID...)
+
+		cc.Log().Info("Starting CC", "sid", hex.EncodeToString(sid))
 		sigShares := make(map[NodeID][]byte)
 
 		// Generate own share and broadcast
 		{
-			sigShare := lo.Must(tbls.Sign(cc.suite, cc.priShare, cc.sid))
+			sigShare := lo.Must(tbls.Sign(cc.blsParams.Suite, cc.blsParams.PriShare, sid))
 			if cc.Endpoint().N() == 1 {
 				// Only one node; decide immediately.
 				coin := makeCoin(sigShare)
@@ -95,14 +94,14 @@ func (cc *CommonCoinBLSSig) Run() {
 					continue
 				}
 				sigShares[msg.Sender] = payload.s
-				if !cc.Output.IsReady() && len(sigShares) >= cc.t {
-					mainSig, err := tbls.Recover(cc.suite, cc.pubPoly, cc.sid, lo.Values(sigShares), cc.t, cc.Endpoint().N())
+				if !cc.Output.IsReady() && len(sigShares) >= cc.blsParams.T {
+					mainSig, err := tbls.Recover(cc.blsParams.Suite, cc.blsParams.PubPoly, sid, lo.Values(sigShares), cc.blsParams.T, cc.Endpoint().N())
 					if err != nil {
-						cc.Log().Warn("CommonCoinBLSSig: signature recovery failed", "error", err)
+						cc.Log().Warn("signature recovery failed", "error", err)
 						continue
 					}
-					if err := bdn.Verify(cc.suite, cc.pubPoly.Commit(), cc.sid, mainSig); err != nil {
-						cc.Log().Warn("CommonCoinBLSSig: signature verification failed", "error", err)
+					if err := bdn.Verify(cc.blsParams.Suite, cc.blsParams.PubPoly.Commit(), sid, mainSig); err != nil {
+						cc.Log().Warn("signature verification failed", "error", err)
 						continue
 					}
 					// Decided!

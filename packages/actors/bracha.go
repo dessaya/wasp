@@ -5,7 +5,6 @@ package actors
 
 import (
 	"fmt"
-	"log/slog"
 
 	"github.com/samber/lo"
 
@@ -76,10 +75,9 @@ func NewReliableBroadcast(
 	endpoint *Endpoint,
 	f int,
 	broadcaster NodeID,
-	log *slog.Logger,
 ) *ReliableBroadcast {
 	return &ReliableBroadcast{
-		Actor:       NewActor(endpoint, log),
+		Actor:       NewActor(endpoint),
 		Output:      NewOutput[[]byte](endpoint.Context()),
 		f:           f,
 		broadcaster: broadcaster,
@@ -130,7 +128,12 @@ func (r *ReliableBroadcast) receive() {
 
 	for {
 		msg := r.Endpoint().Receive(func() {
-			r.Log().Info("status", "output", r.Output.String(), "readySent", readySent, "echoCounters", len(echoCounters), "readyCounters", len(readyCounters))
+			r.Log().Info("status",
+				"readySent", readySent,
+				"echoCounters", len(echoCounters),
+				"readyCounters", len(readyCounters),
+				"output", r.Output.IsReady(),
+			)
 		})
 
 		switch payload := msg.Payload.(type) {

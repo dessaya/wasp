@@ -2,7 +2,6 @@ package actors
 
 import (
 	"fmt"
-	"log/slog"
 
 	"github.com/samber/lo"
 )
@@ -48,13 +47,11 @@ import (
 // > • continue looping until both a value b is output in some round r,
 // >   and the value Coin_r' = b for some round r' > r.
 
-type MakeCommonCoinFunc func(endpoint *Endpoint, sidSuffix string) *CommonCoinBLSSig
-
 type BinaryAgreement struct {
 	Actor
-	Output *Output[bool]
-	f      int                // maximum faulty nodes
-	makeCC MakeCommonCoinFunc // creates the Common Coin actor
+	Output   *Output[bool]
+	f        int
+	ccParams CommonCoinBLSSigParams
 }
 
 type (
@@ -88,14 +85,13 @@ func (m *msgABA) String() string {
 func NewBinaryAgreement(
 	endpoint *Endpoint,
 	f int,
-	makeCC MakeCommonCoinFunc,
-	log *slog.Logger,
+	ccParams CommonCoinBLSSigParams,
 ) *BinaryAgreement {
 	return &BinaryAgreement{
-		Actor:  NewActor(endpoint, log),
-		Output: NewOutput[bool](endpoint.Context()),
-		f:      f,
-		makeCC: makeCC,
+		Actor:    NewActor(endpoint),
+		Output:   NewOutput[bool](endpoint.Context()),
+		f:        f,
+		ccParams: ccParams,
 	}
 }
 
@@ -120,8 +116,7 @@ func (aba *BinaryAgreement) Run(input bool) {
 			vals := aba.doRound(r, est, incoming)
 
 			// > s ← Coin_r.GetCoin()
-			sidSuffix := fmt.Sprintf("%d", r)
-			cc := aba.makeCC(aba.Endpoint().Router.GetEndpoint(aba.Endpoint().Path.Sub("cc%d", r)), sidSuffix)
+			cc := NewCommonCoinBLSSig(aba.Endpoint().Sub("cc:%d", r), aba.ccParams)
 			cc.Run()
 			s := cc.Output.Wait()
 
@@ -129,6 +124,7 @@ func (aba *BinaryAgreement) Run(input bool) {
 			// > and the value Coin_r' = b for some round r' > r.
 			if lastOutputRound >= 0 && r > lastOutputRound && aba.Output.IsReady() {
 				if s == aba.Output.MustGet() {
+					aba.Log().Info("Binary Agreement decided", "value", s, "round", r)
 					return
 				}
 			}
@@ -179,7 +175,14 @@ func (aba *BinaryAgreement) doRound(r int, est bool, incoming map[int][]MessageI
 
 	for {
 		aba.receiveMessage(incoming, func() {
-			aba.Log().Info("status", "output", aba.Output.String(), "sentBVAL", len(sentBVAL), "receivedBVAL", len(receivedBVAL), "receivedAUX", len(receivedAUX), "binValues", len(binValues))
+			aba.Log().Info("status",
+				"output", aba.Output.String(),
+				"round", r,
+				"sentBVAL", len(sentBVAL),
+				"receivedBVAL", len(receivedBVAL),
+				"receivedAUX", len(receivedAUX),
+				"binValues", len(binValues),
+			)
 		})
 		// process all pending messages for this round
 		msgs := incoming[r]

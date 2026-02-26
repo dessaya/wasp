@@ -2,7 +2,6 @@ package actors_test
 
 import (
 	"fmt"
-	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -53,7 +52,13 @@ func testCommonCoinCase(t *testing.T, n, threshold, silent int) {
 		endpoint := routers[nodeID].GetEndpoint(path)
 		if i < active {
 			// fair node
-			node := actors.NewCommonCoinBLSSig(endpoint, threshold, suite, pubPoly, priShares[i], sid, slog.Default())
+			node := actors.NewCommonCoinBLSSig(endpoint, actors.CommonCoinBLSSigParams{
+				T:        threshold,
+				Suite:    suite,
+				PubPoly:  pubPoly,
+				PriShare: priShares[i],
+				SID:      sid,
+			})
 			outputs[nodeID] = node.Output
 			node.Run()
 		} else {
@@ -62,7 +67,7 @@ func testCommonCoinCase(t *testing.T, n, threshold, silent int) {
 		}
 	}
 
-	actorstest.Start(t, ctx, routers)
+	actorstest.Start(t, ctx, routers, false)
 
 	done := actors.OutputsReadyChan(ctx, outputs)
 	var coins []bool

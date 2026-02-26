@@ -2,7 +2,6 @@ package actors_test
 
 import (
 	"fmt"
-	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -52,7 +51,7 @@ func testBracha(t *testing.T, n, f, s int) {
 		endpoint := routers[nodeID].GetEndpoint(path)
 		if i < n-s {
 			// fair node
-			rbc := actors.NewReliableBroadcast(endpoint, f, broadcaster, slog.Default())
+			rbc := actors.NewReliableBroadcast(endpoint, f, broadcaster)
 			outputs[nodeID] = rbc.Output
 			if i == 0 {
 				// broadcaster broadcasts "hello"
@@ -67,7 +66,7 @@ func testBracha(t *testing.T, n, f, s int) {
 		}
 	}
 
-	actorstest.Start(t, ctx, routers)
+	actorstest.Start(t, ctx, routers, false)
 
 	// check that all nodes received the correct message
 	done := actors.OutputsReadyChan(ctx, outputs)

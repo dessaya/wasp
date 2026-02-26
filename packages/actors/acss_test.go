@@ -2,7 +2,6 @@ package actors_test
 
 import (
 	"fmt"
-	"log/slog"
 	"math/rand"
 	"testing"
 
@@ -77,7 +76,7 @@ func runACSSTest(t *testing.T, n, f int, silent int, faultyDeals int) {
 	for i, nid := range peers {
 		endpoint := routers[nid].GetEndpoint(actors.Path("acss"))
 		if isValidNode(i) {
-			acss := actors.NewACSS(endpoint, f, suite, pubKeys, sks[nid], slog.Default().With("nodeID", nid.ShortString()))
+			acss := actors.NewACSS(endpoint, f, suite, pubKeys, sks[nid])
 			if nid == dealer {
 				deal := acss.MakeDealFromSecret(secret)
 				for range faultyDeals {
@@ -95,7 +94,7 @@ func runACSSTest(t *testing.T, n, f int, silent int, faultyDeals int) {
 		}
 	}
 
-	actorstest.Start(t, ctx, routers)
+	actorstest.Start(t, ctx, routers, false)
 
 	done := actors.OutputsReadyChan(ctx, outputs)
 	var priShares []*share.PriShare

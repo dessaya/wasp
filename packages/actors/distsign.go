@@ -3,7 +3,6 @@ package actors
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/samber/lo"
 
@@ -68,10 +67,9 @@ func NewDistSign(
 	peerPKs map[NodeID]kyber.Point,
 	mySK kyber.Scalar,
 	longTermSecretShare tcrypto.SecretShare,
-	log *slog.Logger,
 ) *DistSign {
 	return &DistSign{
-		Actor:                 NewActor(endpoint, log),
+		Actor:                 NewActor(endpoint),
 		OutputProposedIndexes: NewOutput[[]int](endpoint.Context()),
 		OutputSignature:       NewOutput[[]byte](endpoint.Context()),
 		f:                     f,
@@ -87,7 +85,7 @@ func NewDistSign(
 // OutputProposedIndexes is set. Then the process waits until InputDecided is called with the ACS decision.
 func (d *DistSign) Start() {
 	d.Go(func() {
-		dkg := NewNonceDKG(d.Endpoint().Sub("dkg"), d.f, d.suite, d.peerPKs, d.mySK, d.Log())
+		dkg := NewNonceDKG(d.Endpoint().Sub("dkg"), d.f, d.suite, d.peerPKs, d.mySK)
 		dkg.Start()
 		dkgIntermediateOutput := dkg.IntermediateOutput.ValueChan()
 		dkgFinalOutput := dkg.FinalOutput.ValueChan()

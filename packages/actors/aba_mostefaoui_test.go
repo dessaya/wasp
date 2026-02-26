@@ -5,7 +5,6 @@ package actors_test
 
 import (
 	"fmt"
-	"log/slog"
 	"math/rand"
 	"testing"
 
@@ -54,13 +53,15 @@ func TestABA_Mostefaoui(t *testing.T) {
 		{10, 3, 3, "r", valueRand, nil},
 		{31, 10, 10, "r", valueRand, nil},
 	} {
-		t.Run(fmt.Sprintf("N=%d,F=%d,I=%s,S=%d", tc.n, tc.f, tc.inputType, tc.silent), func(t *testing.T) {
-			testABA(t, tc.n, tc.f, tc.silent, tc.input, tc.expected)
-		})
+		for _, shuffle := range []bool{false, true} {
+			t.Run(fmt.Sprintf("N=%d,F=%d,I=%s,S=%d,s=%v", tc.n, tc.f, tc.inputType, tc.silent, shuffle), func(t *testing.T) {
+				testABA(t, tc.n, tc.f, tc.silent, tc.input, tc.expected, shuffle)
+			})
+		}
 	}
 }
 
-func testABA(t *testing.T, n, f int, silent int, input func() bool, expected *bool) {
+func testABA(t *testing.T, n, f int, silent int, input func() bool, expected *bool, shuffle bool) {
 	// Common Coin threshold:
 	threshold := f + 1
 	active := n - silent
@@ -81,22 +82,16 @@ func testABA(t *testing.T, n, f int, silent int, input func() bool, expected *bo
 		endpoint := routers[nodeID].GetEndpoint(abaPath)
 		if i < active {
 			// fair node
-			makeCC := func(endpoint *actors.Endpoint, sid string) *actors.CommonCoinBLSSig {
-				return actors.NewCommonCoinBLSSig(
-					endpoint,
-					threshold,
-					suite,
-					pubPoly,
-					priShares[i],
-					[]byte(sid),
-					slog.Default(),
-				)
-			}
 			aba := actors.NewBinaryAgreement(
 				endpoint,
 				f,
-				makeCC,
-				slog.Default(),
+				actors.CommonCoinBLSSigParams{
+					T:        threshold,
+					Suite:    suite,
+					PubPoly:  pubPoly,
+					PriShare: priShares[i],
+					SID:      []byte(t.Name()),
+				},
 			)
 			aba.Run(input())
 			abaOutputs[nodeID] = aba.Output
@@ -106,7 +101,7 @@ func testABA(t *testing.T, n, f int, silent int, input func() bool, expected *bo
 		}
 	}
 
-	actorstest.Start(t, ctx, routers)
+	actorstest.Start(t, ctx, routers, shuffle)
 
 	// Collect outputs from all active nodes.
 	done := actors.OutputsReadyChan(ctx, abaOutputs)

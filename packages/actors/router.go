@@ -1,8 +1,30 @@
 package actors
 
 import (
+	"log/slog"
 	"sync"
+
+	"github.com/ethereum/go-ethereum/common/hexutil"
+
+	"github.com/iotaledger/wasp/v2/packages/cryptolib"
 )
+
+// NodeID is the unique identifier of a node in the network.
+type NodeID [32]byte
+
+func (id NodeID) String() string {
+	return hexutil.Encode(id[:])
+}
+
+func (id NodeID) ShortString() string {
+	return hexutil.Encode(id[:4])
+}
+
+func NodeIDFromPublicKey(pk *cryptolib.PublicKey) NodeID {
+	var nodeID NodeID
+	copy(nodeID[:], pk.AsBytes())
+	return nodeID
+}
 
 // Router coordinates the actors within a node.
 type Router struct {
@@ -75,4 +97,8 @@ func (r *Router) LogStatus() {
 	for _, endpoint := range r.endpoints {
 		endpoint.LogStatus()
 	}
+}
+
+func (r *Router) Log() *slog.Logger {
+	return r.Context().Log().With("nodeID", r.Me.ShortString())
 }

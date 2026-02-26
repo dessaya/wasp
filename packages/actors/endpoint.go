@@ -4,29 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/samber/lo"
-
-	"github.com/iotaledger/wasp/v2/packages/cryptolib"
 )
-
-// NodeID is the unique identifier of a node in the network.
-type NodeID [32]byte
-
-func (id NodeID) String() string {
-	return hexutil.Encode(id[:])
-}
-
-func (id NodeID) ShortString() string {
-	return hexutil.Encode(id[:4])
-}
-
-func NodeIDFromPublicKey(pk *cryptolib.PublicKey) NodeID {
-	var nodeID NodeID
-	copy(nodeID[:], pk.AsBytes())
-	return nodeID
-}
 
 // Path is a unique name for each actor in a node. An actor can only communicate
 // with other actors with the same Path in other nodes.
@@ -156,4 +137,8 @@ func (e *Endpoint) SendToAllButMe(m MessagePayload) {
 
 func (e *Endpoint) Sub(format string, args ...any) *Endpoint {
 	return e.Router.GetEndpoint(e.Path.Sub(format, args...))
+}
+
+func (e *Endpoint) Log() *slog.Logger {
+	return e.Router.Log().With("path", e.Path)
 }

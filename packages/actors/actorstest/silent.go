@@ -1,8 +1,6 @@
 package actorstest
 
 import (
-	"log/slog"
-
 	"github.com/iotaledger/wasp/v2/packages/actors"
 )
 
@@ -14,7 +12,7 @@ type Silent struct {
 
 func NewSilent(endpoint *actors.Endpoint) *Silent {
 	return &Silent{
-		Actor:    actors.NewActor(endpoint, slog.Default()),
+		Actor:    actors.NewActor(endpoint),
 		endpoint: endpoint,
 	}
 }

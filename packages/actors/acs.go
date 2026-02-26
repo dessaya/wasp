@@ -1,9 +1,6 @@
 package actors
 
 import (
-	"fmt"
-	"log/slog"
-
 	"github.com/samber/lo"
 )
 
@@ -31,23 +28,18 @@ import (
 // >     each RBC_j such that j ∈ C. Finally output ∪_{j∈C} v_j.
 type ACS struct {
 	Actor
-	Output *Output[map[NodeID][]byte]
-	f      int
-	makeCC MakeCommonCoinFunc
+	Output   *Output[map[NodeID][]byte]
+	f        int
+	ccParams CommonCoinBLSSigParams
 }
 
 // Constructor.
-func NewACS(
-	endpoint *Endpoint,
-	f int,
-	makeCC MakeCommonCoinFunc,
-	log *slog.Logger,
-) *ACS {
+func NewACS(endpoint *Endpoint, f int, ccParams CommonCoinBLSSigParams) *ACS {
 	return &ACS{
-		Actor:  NewActor(endpoint, log),
-		Output: NewOutput[map[NodeID][]byte](endpoint.Context()),
-		f:      f,
-		makeCC: makeCC,
+		Actor:    NewActor(endpoint),
+		Output:   NewOutput[map[NodeID][]byte](endpoint.Context()),
+		f:        f,
+		ccParams: ccParams,
 	}
 }
 
@@ -57,7 +49,7 @@ func (a *ACS) Run(vi []byte) {
 		// > where P_i is the sender of RBC_i.
 		rbcOutputs := make(map[int]*Output[[]byte])
 		for i, nid := range a.Endpoint().Router.Peers {
-			rbc := NewReliableBroadcast(a.Endpoint().Sub("rbc:%d", i), a.f, nid, a.Log())
+			rbc := NewReliableBroadcast(a.Endpoint().Sub("rbc:%d", i), a.f, nid)
 			rbcOutputs[i] = rbc.Output
 			if nid == a.Endpoint().Me() {
 				// >   • upon receiving input v_i, input v_i to RBC_i
@@ -73,10 +65,7 @@ func (a *ACS) Run(vi []byte) {
 		abas := make([]*BinaryAgreement, a.Endpoint().N())
 		abaDone := make(chan int)
 		startABA := func(i int, input bool) {
-			makeCC := func(endpoint *Endpoint, sid string) *CommonCoinBLSSig {
-				return a.makeCC(endpoint, fmt.Sprintf("%s:%d", sid, i))
-			}
-			aba := NewBinaryAgreement(a.Endpoint().Sub("aba:%d", i), a.f, makeCC, a.Log())
+			aba := NewBinaryAgreement(a.Endpoint().Sub("aba:%d", i), a.f, a.ccParams)
 			aba.Run(input)
 			aba.Output.OnReady(func() {
 				abaDone <- i
@@ -114,11 +103,15 @@ func (a *ACS) Run(vi []byte) {
 			case <-a.Context().Done():
 				panic(a.Context().Err())
 			case <-a.Endpoint().Status():
-				a.Log().Info("status", "rbcDone", len(rbcDone), "abaDone", len(abaDone))
+				a.Log().Info("status",
+					"rbcDone", len(rbcDone),
+					"abaDone", len(abaDone),
+					"output", a.Output.IsReady(),
+				)
 			case j := <-rbcDone:
 				// >   • upon delivery of v_j from RBC_j, if input has not yet been
 				// >     provided to BA_j, then provide input 1 to BA_j.
-				a.Log().Info("RBC done", "i", j, "output", rbcOutputs[j].MustGet())
+				a.Log().Info("RBC done", "i", j)
 				if abas[j] == nil {
 					startABA(j, true)
 				}

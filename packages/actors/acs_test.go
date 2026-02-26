@@ -2,7 +2,6 @@ package actors_test
 
 import (
 	"fmt"
-	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -57,19 +56,13 @@ func testACSCase(t *testing.T, n, f, silent int) {
 		endpoint := routers[nodeID].GetEndpoint(path)
 		if i < active {
 			// Honest node with ACS.
-			makeCC := func(endpoint *actors.Endpoint, sid string) *actors.CommonCoinBLSSig {
-				// Derive a per-round session ID to avoid cross-round interference.
-				return actors.NewCommonCoinBLSSig(
-					endpoint,
-					ccThreshold,
-					suite,
-					pubPoly,
-					priShares[i],
-					[]byte(sid),
-					slog.Default(),
-				)
-			}
-			acs := actors.NewACS(endpoint, f, makeCC, slog.Default().With("nodeID", nodeID.ShortString()))
+			acs := actors.NewACS(endpoint, f, actors.CommonCoinBLSSigParams{
+				T:        ccThreshold,
+				Suite:    suite,
+				PubPoly:  pubPoly,
+				PriShare: priShares[i],
+				SID:      []byte(t.Name()),
+			})
 			outputs[nodeID] = acs.Output
 			// Each node receives a deterministic, node-specific input:
 			vi := fmt.Appendf(nil, "%v-input", nodeID)
@@ -79,7 +72,7 @@ func testACSCase(t *testing.T, n, f, silent int) {
 		}
 	}
 
-	actorstest.Start(t, ctx, routers)
+	actorstest.Start(t, ctx, routers, false)
 
 	// Collect outputs from active nodes.
 	done := actors.OutputsReadyChan(ctx, outputs)

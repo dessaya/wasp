@@ -2,7 +2,6 @@ package actors_test
 
 import (
 	"fmt"
-	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -47,7 +46,7 @@ func testDistSign(t *testing.T, n int, f int) {
 		nodePKs[nodeIDs[i]] = suite.Point().Mul(nodeSKs[nodeIDs[i]], nil)
 	}
 
-	longTermPK, longTermSecretShares := makeTestDistributedKey(t, suite, nodeIDs, nodeSKs, nodePKs, f, slog.Default())
+	longTermPK, longTermSecretShares := makeTestDistributedKey(t, suite, nodeIDs, nodeSKs, nodePKs, f)
 
 	// Setup nodes
 	distributedSignatures := map[actors.NodeID]*actors.DistSign{}
@@ -55,13 +54,13 @@ func testDistSign(t *testing.T, n int, f int) {
 	const path = "ds"
 	for _, nid := range nodeIDs {
 		endpoint := routers[nid].GetEndpoint(path)
-		ds := actors.NewDistSign(endpoint, f, suite, nodePKs, nodeSKs[nid], longTermSecretShares[nid], slog.Default())
+		ds := actors.NewDistSign(endpoint, f, suite, nodePKs, nodeSKs[nid], longTermSecretShares[nid])
 		distributedSignatures[nid] = ds
 		proposedIndexesOuts[nid] = ds.OutputProposedIndexes
 		ds.Start()
 	}
 
-	actorstest.Start(t, ctx, routers)
+	actorstest.Start(t, ctx, routers, false)
 
 	// wait until n-f intermediate outputs are ready
 	ch := actors.OutputsReadyChan(ctx, proposedIndexesOuts)
@@ -106,7 +105,6 @@ func makeTestDistributedKey(
 	nodeSKs map[actors.NodeID]kyber.Scalar,
 	nodePKs map[actors.NodeID]kyber.Point,
 	f int,
-	log *slog.Logger,
 ) (kyber.Point, map[actors.NodeID]tcrypto.SecretShare) {
 	n := len(nodeIDs)
 	threshold := n - f
@@ -129,12 +127,12 @@ func makeTestDistributedKey(
 	const path = "dkg"
 	for _, nid := range nodeIDs {
 		endpoint := routers[nid].GetEndpoint(path)
-		nodes[nid] = actors.NewNonceDKG(endpoint, f, suite, nodePKs, nodeSKs[nid], log)
+		nodes[nid] = actors.NewNonceDKG(endpoint, f, suite, nodePKs, nodeSKs[nid])
 		nodes[nid].Start()
 		intermediateOutputs[nid] = nodes[nid].IntermediateOutput
 	}
 
-	actorstest.Start(t, ctx, routers)
+	actorstest.Start(t, ctx, routers, false)
 
 	// Check the INTERMEDIATE result.
 	ch := actors.OutputsReadyChan(ctx, intermediateOutputs)

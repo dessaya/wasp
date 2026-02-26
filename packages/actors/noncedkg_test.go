@@ -2,7 +2,6 @@ package actors_test
 
 import (
 	"fmt"
-	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -58,13 +57,12 @@ func testNonceDKG(t *testing.T, n int, f int) {
 			suite,
 			nodePKs,
 			nodeSKs[nodeID],
-			slog.Default(),
 		)
 		dkgs[nodeID] = dkg
 		dkg.Start()
 	}
 
-	actorstest.Start(t, ctx, routers)
+	actorstest.Start(t, ctx, routers, false)
 
 	// Check the INTERMEDIATE result.
 	decidedProposals := map[actors.NodeID][]int{}
